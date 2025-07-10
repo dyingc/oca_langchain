@@ -75,7 +75,8 @@ class OCAChatModel(BaseChatModel):
             response = self.token_manager.request(
                 method="GET",
                 url=self.models_api_url,
-                headers=headers
+                headers=headers,
+                _do_retry=True
             )
             response.raise_for_status()
 
@@ -159,7 +160,8 @@ class OCAChatModel(BaseChatModel):
                 url=self.api_url,
                 headers=headers,
                 json=payload,
-                stream=True
+                stream=True,
+                _do_retry=False
             )
             response.raise_for_status()
         except ConnectionError as e:
@@ -194,7 +196,8 @@ class OCAChatModel(BaseChatModel):
                 method="POST",
                 url=self.api_url,
                 headers=headers,
-                json=payload
+                json=payload,
+                _do_retry=False
             ):
                 if line.startswith('data: '):
                     line_data = line[len('data: '):].strip()

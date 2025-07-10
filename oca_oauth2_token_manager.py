@@ -75,11 +75,12 @@ class OCAOauth2TokenManager:
                 return None
         return {} # direct connection
 
-    def request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+    def request(self, method: str, url: str, _do_retry: bool = True, **kwargs: Any) -> requests.Response:
         """
         执行一个同步请求。
-        它会根据当前的 self.connection_mode 尝试连接。如果失败，它会切换模式并立即重试一次。
+        如果 _do_retry 为 True，它会根据当前的 self.connection_mode 尝试连接。如果失败，它会切换模式并立即重试一次。
         两次连续失败（即，在同一次调用中直连和代理都失败）将引发 ConnectionError。
+        如果 _do_retry 为 False，则只尝试一次，失败则直接抛出 ConnectionError。
         """
         primary_mode = self.connection_mode
         secondary_mode = ConnectionMode.PROXY if primary_mode == ConnectionMode.DIRECT else ConnectionMode.DIRECT
@@ -100,6 +101,9 @@ class OCAOauth2TokenManager:
             return response
         except requests.exceptions.RequestException as e:
             print(f"使用 {primary_mode.value} 模式连接失败: {e}")
+            if not _do_retry:
+                raise ConnectionError(f"无法连接到 {url}。已禁用重试。") from e
+            
             self.connection_mode = secondary_mode
             print(f"连接模式已切换至 {self.connection_mode.value}，下次请求将使用此模式。")
 
@@ -118,10 +122,11 @@ class OCAOauth2TokenManager:
                 print(f"使用 {secondary_mode.value} 模式重试失败: {e2}")
                 raise ConnectionError(f"无法连接到 {url}。{primary_mode.value} 和 {secondary_mode.value} 模式均失败。") from e2
 
-    async def async_stream_request(self, method: str, url: str, **kwargs: Any) -> AsyncIterator[str]:
+    async def async_stream_request(self, method: str, url: str, _do_retry: bool = True, **kwargs: Any) -> AsyncIterator[str]:
         """
         执行一个异步流式请求。
-        逻辑与同步的 request 方法相同：尝试主模式，失败则切换并用备用模式重试。
+        如果 _do_retry 为 True，逻辑与同步的 request 方法相同：尝试主模式，失败则切换并用备用模式重试。
+        如果 _do_retry 为 False，则只尝试一次，失败则直接抛出 ConnectionError。
         """
         primary_mode = self.connection_mode
         secondary_mode = ConnectionMode.PROXY if primary_mode == ConnectionMode.DIRECT else ConnectionMode.DIRECT
@@ -145,6 +150,9 @@ class OCAOauth2TokenManager:
             return
         except httpx.RequestError as e:
             print(f"使用 {primary_mode.value} 模式的流式连接失败: {e}")
+            if not _do_retry:
+                raise ConnectionError(f"无法连接到 {url}。已禁用重试。") from e
+
             self.connection_mode = secondary_mode
             print(f"连接模式已切换至 {self.connection_mode.value}，下次请求将使用此模式。")
 
@@ -192,7 +200,8 @@ class OCAOauth2TokenManager:
                 method="POST",
                 url=token_url,
                 headers=headers,
-                data=data
+                data=data,
+                _do_retry=False
             )
         except ConnectionError as e:
             print(f"刷新令牌失败: {e}")
