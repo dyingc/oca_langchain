@@ -13,7 +13,7 @@ from langchain_core.messages import BaseMessage, AIMessage, AIMessageChunk, Huma
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 # --- Local Imports ---
-from oca_oauth2_token_manager import OCAOauth2TokenManager, request_with_auto_proxy, async_request_with_auto_proxy
+from oca_oauth2_token_manager import OCAOauth2TokenManager, ConnectionMode
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """将 LangChain 的 BaseMessage 对象转换为 API 需要的字典格式。"""
@@ -71,12 +71,10 @@ class OCAChatModel(BaseChatModel):
         }
         print(f"正在从 {self.models_api_url} 获取可用模型列表...")
         try:
-            # 使用新的 request_with_auto_proxy 函数
-            response = request_with_auto_proxy(
+            # 使用 token_manager 的 request 方法
+            response = self.token_manager.request(
                 method="GET",
                 url=self.models_api_url,
-                timeout=self.token_manager.timeout,
-                proxy_url=self.token_manager.proxy_url,
                 headers=headers
             )
             response.raise_for_status()
@@ -156,11 +154,9 @@ class OCAChatModel(BaseChatModel):
         payload = self._build_payload(messages, stream=True, **kwargs)
 
         try:
-            response = request_with_auto_proxy(
+            response = self.token_manager.request(
                 method="POST",
                 url=self.api_url,
-                timeout=self.token_manager.timeout,
-                proxy_url=self.token_manager.proxy_url,
                 headers=headers,
                 json=payload,
                 stream=True
@@ -193,46 +189,27 @@ class OCAChatModel(BaseChatModel):
         headers = self._build_headers()
         payload = self._build_payload(messages, stream=True, **kwargs)
 
-        async def _stream_request(client: httpx.AsyncClient):
-            async with client.stream("POST", self.api_url, headers=headers, json=payload, timeout=self.token_manager.timeout) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith('data: '):
-                        line_data = line[len('data: '):].strip()
-                        if line_data == '[DONE]': break
-                        if not line_data: continue
-                        try:
-                            chunk_data = json.loads(line_data)
-                            delta = chunk_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                            if delta:
-                                yield ChatGenerationChunk(message=AIMessageChunk(content=delta))
-                        except json.JSONDecodeError:
-                            continue
-
-        # 尝试直连
-        print(f"正在尝试直连 {self.api_url}")
         try:
-            async with httpx.AsyncClient() as client:
-                async for chunk in _stream_request(client):
-                    yield chunk
-            print(f"直连 {self.api_url} 成功。")
-            return
-        except httpx.RequestError as e:
-            print(f"直连 {self.api_url} 失败: {e}")
-            if self.token_manager.proxy_url:
-                # 如果直连失败且配置了代理，则尝试使用代理
-                print(f"直连失败，尝试通过代理 {self.token_manager.proxy_url} 连接 {self.api_url}")
-                try:
-                    async with httpx.AsyncClient(proxy=self.token_manager.proxy_url) as proxy_client:
-                        async for chunk in _stream_request(proxy_client):
-                            yield chunk
-                    print(f"通过代理 {self.api_url} 成功。")
-                    return
-                except httpx.RequestError as proxy_e:
-                    print(f"通过代理 {self.api_url} 失败: {proxy_e}")
-                    raise ConnectionError(f"无法连接到 {self.api_url}。直连和代理模式均失败。") from proxy_e
-            else:
-                raise ConnectionError(f"无法连接到 {self.api_url}。请检查您的网络设置。") from e
+            async for line in self.token_manager.async_stream_request(
+                method="POST",
+                url=self.api_url,
+                headers=headers,
+                json=payload
+            ):
+                if line.startswith('data: '):
+                    line_data = line[len('data: '):].strip()
+                    if line_data == '[DONE]': break
+                    if not line_data: continue
+                    try:
+                        chunk_data = json.loads(line_data)
+                        delta = chunk_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        if delta:
+                            yield ChatGenerationChunk(message=AIMessageChunk(content=delta))
+                    except json.JSONDecodeError:
+                        continue
+        except ConnectionError as e:
+            print(f"异步流式 API 请求失败: {e}")
+            raise
 
     def _generate(
         self,
