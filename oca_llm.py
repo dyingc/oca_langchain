@@ -12,7 +12,7 @@ from langchain_core.messages import BaseMessage, AIMessage, AIMessageChunk, Huma
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 # --- Local Imports ---
-from oca_oauth2_token_manager import OcaOauth2TokenManager
+from oca_oauth2_token_manager import OCAOauth2TokenManager
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """将 LangChain 的 BaseMessage 对象转换为 API 需要的字典格式。"""
@@ -32,7 +32,7 @@ class OCAChatModel(BaseChatModel):
     models_api_url: Optional[str] = None
 
     # --- 核心组件 ---
-    token_manager: OcaOauth2TokenManager
+    token_manager: OCAOauth2TokenManager
 
     # --- 动态获取的数据 ---
     available_models: List[str] = []
@@ -105,7 +105,7 @@ class OCAChatModel(BaseChatModel):
             self.available_models = []
 
     @classmethod
-    def from_env(cls, token_manager: OcaOauth2TokenManager) -> OCAChatModel:
+    def from_env(cls, token_manager: OCAOauth2TokenManager) -> OCAChatModel:
         """通过环境变量和 Token Manager 实例化聊天模型。"""
         api_url = os.getenv("LLM_API_URL")
         model = os.getenv("LLM_MODEL_NAME", "")
@@ -245,7 +245,7 @@ if __name__ == '__main__':
             # 1. 初始化 Token Manager 和 Chat Model
             #    网络/代理检查在令牌管理器内部自动完成。
             #    聊天模型随后会继承代理设置。
-            token_manager = OcaOauth2TokenManager(dotenv_path=dotenv_path)
+            token_manager = OCAOauth2TokenManager(dotenv_path=dotenv_path)
             chat_model = OCAChatModel.from_env(token_manager)
 
             # 2. 打印获取到的模型信息

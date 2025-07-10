@@ -5,7 +5,7 @@ from typing import Optional, Dict
 
 from dotenv import load_dotenv, get_key, set_key
 
-class OcaOauth2TokenManager:
+class OCAOauth2TokenManager:
     """
     管理 OAuth2 令牌，包括自动刷新和持久化。
     内置网络连通性检查和代理回退机制。
