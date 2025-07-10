@@ -11,7 +11,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, AIMessage, AIMessageChunk, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
-from oauth2_token_manager import Oauth2TokenManager
+from oca_oauth2_token_manager import OCAOauth2TokenManager
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """将 LangChain 的 BaseMessage 对象转换为 API 需要的字典格式。"""
@@ -23,7 +23,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
         role = "system"
     return {"role": role, "content": message.content}
 
-class CustomOauthChatModel(BaseChatModel):
+class OCAChatModel(BaseChatModel):
     """
     一个支持 OAuth2 和流式响应的自定义 LangChain 聊天模型。
     它能动态获取可用的模型列表。
@@ -35,7 +35,7 @@ class CustomOauthChatModel(BaseChatModel):
     models_api_url: Optional[str] = None
 
     # --- 核心组件 ---
-    token_manager: Oauth2TokenManager
+    token_manager: OCAOauth2TokenManager
 
     # --- 动态获取的数据 ---
     available_models: List[str] = []
@@ -48,7 +48,7 @@ class CustomOauthChatModel(BaseChatModel):
         初始化模型，并获取可用模型列表。
         """
         super().__init__(**data)
-        self._fetch_available_models()
+        self.fetch_available_models()
 
         # 如果用户没有指定模型，则使用列表中的第一个作为默认模型
         if not self.model and self.available_models:
@@ -62,7 +62,7 @@ class CustomOauthChatModel(BaseChatModel):
                 f"可用模型: {', '.join(self.available_models)}"
             )
 
-    def _fetch_available_models(self):
+    def fetch_available_models(self):
         """
         调用 API 获取并填充可用模型列表。
         """
@@ -105,7 +105,7 @@ class CustomOauthChatModel(BaseChatModel):
 
 
     @classmethod
-    def from_env(cls, token_manager: Oauth2TokenManager) -> "CustomOauthChatModel":
+    def from_env(cls, token_manager: OCAOauth2TokenManager) -> "OCAChatModel":
         """通过环境变量和 Token Manager 实例化聊天模型。"""
         api_url = os.getenv("LLM_API_URL")
         # LLM_MODEL_NAME 现在是可选的
@@ -236,8 +236,8 @@ if __name__ == '__main__':
         try:
             # 1. 初始化 Token Manager 和 Chat Model
             #    模型初始化时会自动获取可用模型列表
-            token_manager = Oauth2TokenManager(dotenv_path=dotenv_path)
-            chat_model = CustomOauthChatModel.from_env(token_manager)
+            token_manager = OCAOauth2TokenManager(dotenv_path=dotenv_path)
+            chat_model = OCAChatModel.from_env(token_manager)
 
             # 2. 打印获取到的模型信息
             print(f"\n--- 检测到可用模型 ({len(chat_model.available_models)}个) ---")

@@ -5,7 +5,7 @@ from typing import Optional
 
 from dotenv import load_dotenv, get_key, set_key
 
-class Oauth2TokenManager:
+class OCAOauth2TokenManager:
     """
     管理 OAuth2 令牌，包括自动刷新和持久化 Access Token 及 Refresh Token。
     """
@@ -16,10 +16,10 @@ class Oauth2TokenManager:
         """
         if not os.path.exists(dotenv_path):
             raise FileNotFoundError(f"错误：指定的 .env 文件路径不存在 -> {dotenv_path}")
-        
+
         self.dotenv_path: str = dotenv_path
         load_dotenv(self.dotenv_path)
-        
+
         self.host: Optional[str] = os.getenv("OAUTH_HOST")
         self.client_id: Optional[str] = os.getenv("OAUTH_CLIENT_ID")
 
@@ -28,7 +28,7 @@ class Oauth2TokenManager:
 
         self.access_token: Optional[str] = None
         self.expires_at: Optional[datetime] = None
-        
+
         # 尝试从 .env 加载已存在的 access token
         self._load_token_from_env()
         print("Oauth2TokenManager 初始化成功。")
@@ -105,7 +105,7 @@ class Oauth2TokenManager:
         if self.access_token and self.expires_at and datetime.now(timezone.utc) < self.expires_at:
             print("使用内存中缓存的有效 Access Token。")
             return self.access_token
-        
+
         print("Access Token 已过期或不存在，正在启动刷新流程...")
         self._refresh_tokens()
         if self.access_token:
