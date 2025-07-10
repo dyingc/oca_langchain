@@ -20,7 +20,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
     role = role_map.get(type(message), "system")
     return {"role": role, "content": message.content}
 
-class OcaChatModel(BaseChatModel):
+class OCAChatModel(BaseChatModel):
     """
     一个支持 OAuth2、流式响应和动态模型获取的自定义 LangChain 聊天模型。
     它会从其 OcaOauth2TokenManager 实例中继承网络代理设置。
@@ -105,7 +105,7 @@ class OcaChatModel(BaseChatModel):
             self.available_models = []
 
     @classmethod
-    def from_env(cls, token_manager: OcaOauth2TokenManager) -> OcaChatModel:
+    def from_env(cls, token_manager: OcaOauth2TokenManager) -> OCAChatModel:
         """通过环境变量和 Token Manager 实例化聊天模型。"""
         api_url = os.getenv("LLM_API_URL")
         model = os.getenv("LLM_MODEL_NAME", "")
@@ -246,7 +246,7 @@ if __name__ == '__main__':
             #    网络/代理检查在令牌管理器内部自动完成。
             #    聊天模型随后会继承代理设置。
             token_manager = OcaOauth2TokenManager(dotenv_path=dotenv_path)
-            chat_model = OcaChatModel.from_env(token_manager)
+            chat_model = OCAChatModel.from_env(token_manager)
 
             # 2. 打印获取到的模型信息
             print(f"\n--- 检测到 {len(chat_model.available_models)} 个可用模型 ---")
