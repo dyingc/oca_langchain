@@ -75,7 +75,9 @@ OAUTH_ACCESS_TOKEN_EXPIRES_AT=
 
 ## 🛠️ 如何运行
 
-配置好 `.env` 文件后，直接运行 `custom_llm.py` 即可启动测试程序：
+### 命令行测试
+
+配置好 `.env` 文件后，直接运行 `custom_llm.py` 即可启动原始的命令行测试程序：
 
 ```bash
 python custom_llm.py
@@ -86,7 +88,23 @@ python custom_llm.py
 2.  同步非流式调用 (`llm.invoke`)
 3.  异步流式调用 (`llm.astream`)
 
-第一次运行时，程序会自动执行令牌刷新流程，并将获取到的新令牌信息写回 `.env` 文件。
+### 启动交互式聊天机器人 UI
+
+我们提供了一个基于 Streamlit 的交互式 Web UI。
+
+**1. 安装 Streamlit**
+
+```bash
+pip install streamlit
+```
+
+**2. 启动应用**
+
+```bash
+streamlit run app.py
+```
+
+这会启动一个本地 Web 服务器，并在您的浏览器中打开一个新的标签页，显示聊天机器人界面。您可以在侧边栏调整系统提示、温度和选择不同的模型。
 
 ## 🤖 代码概览
 
