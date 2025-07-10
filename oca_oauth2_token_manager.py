@@ -1,9 +1,51 @@
 import os
 import requests
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
+from urllib.parse import urlparse
+from enum import Enum
 
 from dotenv import load_dotenv, get_key, set_key
+
+class ConnectionMode(Enum):
+    DIRECT = "direct"
+    PROXY = "proxy"
+
+def request_with_auto_proxy(method: str, url: str, timeout: float, proxy_url: Optional[str], **kwargs: Any) -> requests.Response:
+    """
+    封装 requests 请求，先尝试直连，如果失败且配置了代理，则自动使用代理重试。
+    """
+    # 尝试直连
+    print(f"正在尝试直连 {url}")
+    try:
+        response = requests.request(method, url, timeout=timeout, proxies={}, **kwargs)
+        response.raise_for_status()
+        print(f"直连 {url} 成功。")
+        return response
+    except requests.exceptions.RequestException as e:
+        print(f"直连 {url} 失败: {e}")
+        if proxy_url:
+            # 如果直连失败且配置了代理，则尝试使用代理
+            proxies = {
+                "http://": proxy_url,
+                "https://": proxy_url,
+            }
+            print(f"直连失败，尝试通过代理 {proxy_url} 连接 {url}")
+            try:
+                response = requests.request(method, url, timeout=timeout, proxies=proxies, **kwargs)
+                response.raise_for_status()
+                print(f"通过代理 {url} 成功。")
+                return response
+            except requests.exceptions.RequestException as proxy_e:
+                print(f"通过代理 {url} 失败: {proxy_e}")
+                raise ConnectionError(
+                    f"无法连接到 {url}。直连和代理模式均失败。请检查您的网络设置或代理配置。"
+                ) from proxy_e
+        else:
+            # 如果没有配置代理，则直接抛出直连失败的异常
+            raise ConnectionError(
+                f"无法连接到 {url}。请检查您的网络设置。"
+            ) from e
 
 class OCAOauth2TokenManager:
     """
@@ -14,7 +56,6 @@ class OCAOauth2TokenManager:
         """
         初始化 Token 管理器。
         - 加载配置
-        - 检测网络连通性并确定是否使用代理
         - 尝试从 .env 文件加载已有的有效 Access Token
         """
         if not os.path.exists(dotenv_path):
@@ -30,55 +71,23 @@ class OCAOauth2TokenManager:
         if not all([self.host, self.client_id]):
             raise ValueError("错误：请确保 .env 文件中包含 OAUTH_HOST 和 OAUTH_CLIENT_ID。")
 
+        # proxies 字段不再在初始化时设置，而是由 request_with_auto_proxy 动态处理
         self.proxies: Dict[str, str] = {}
         self.access_token: Optional[str] = None
         self.expires_at: Optional[datetime] = None
 
-        # 执行网络检查并设置代理
-        self._check_network_and_set_proxies()
+        # 网络超时时间：优先从env获取，否则默认2秒
+        self.timeout: float = 2.0
+        try:
+            timeout_str = get_key(self.dotenv_path, "CONNECTION_TIMEOUT")
+            if timeout_str:
+                self.timeout = float(timeout_str)
+        except Exception:
+            pass
 
         # 尝试从 .env 加载已存在的 access token
         self._load_token_from_env()
         print("OcaOauth2TokenManager 初始化成功。")
-
-    def _check_network_and_set_proxies(self):
-        """检查网络连通性，如果直连失败则尝试使用代理。"""
-        test_url = f"https://{self.host}" # 使用认证主机作为测试目标
-        print(f"正在测试网络连通性，目标: {test_url}")
-
-        try:
-            # 尝试直接连接 (设置一个较短的超时时间)
-            requests.get(test_url, timeout=5)
-            print("网络直连成功，无需代理。")
-            self.proxies = {}
-            return
-        except requests.exceptions.RequestException as e:
-            print(f"网络直连失败: {e}")
-
-        # 如果直连失败，并且配置了代理URL，则尝试使用代理
-        if self.proxy_url:
-            print(f"直连失败，尝试使用代理: {self.proxy_url}")
-            # 为 httpx 和 requests 创建兼容的代理字典
-            proxies = {
-                "http://": self.proxy_url,
-                "https://": self.proxy_url,
-            }
-            try:
-                # requests 也能理解这种格式的 key
-                requests.get(test_url, proxies=proxies, timeout=10)
-                print("通过代理连接成功。")
-                self.proxies = proxies
-                return
-            except requests.exceptions.RequestException as e:
-                print(f"通过代理连接失败: {e}")
-                raise ConnectionError(
-                    f"无法通过代理 {self.proxy_url} 连接到 {test_url}。请检查您的网络和代理设置。"
-                ) from e
-
-        # 如果没有配置代理或代理也失败了
-        raise ConnectionError(
-            f"无法连接到 {test_url}。请检查您的网络设置或配置一个有效的 HTTP_PROXY_URL。"
-        )
 
     def _load_token_from_env(self):
         """尝试从 .env 文件加载并验证 Access Token。"""
@@ -114,10 +123,17 @@ class OCAOauth2TokenManager:
 
         print(f"正在向 {token_url} 发送请求以刷新令牌...")
         try:
-            # 在所有请求中使用已确定的代理配置
-            response = requests.post(token_url, headers=headers, data=data, timeout=10, proxies=self.proxies)
+            # 使用新的 request_with_auto_proxy 函数
+            response = request_with_auto_proxy(
+                method="POST",
+                url=token_url,
+                timeout=self.timeout,
+                proxy_url=self.proxy_url,
+                headers=headers,
+                data=data
+            )
             response.raise_for_status()
-        except requests.exceptions.RequestException as e:
+        except ConnectionError as e:
             print(f"请求失败: {e}")
             raise
 

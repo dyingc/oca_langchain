@@ -12,7 +12,7 @@ from langchain_core.messages import BaseMessage, AIMessage, AIMessageChunk, Huma
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 # --- Local Imports ---
-from oca_oauth2_token_manager import OCAOauth2TokenManager
+from oca_oauth2_token_manager import OCAOauth2TokenManager, request_with_auto_proxy
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """将 LangChain 的 BaseMessage 对象转换为 API 需要的字典格式。"""
@@ -62,6 +62,8 @@ class OCAChatModel(BaseChatModel):
                 f"可用模型: {', '.join(self.available_models)}"
             )
 
+    
+
     def fetch_available_models(self):
         """调用 API 获取并填充可用模型列表。"""
         if not self.models_api_url:
@@ -76,12 +78,13 @@ class OCAChatModel(BaseChatModel):
         }
         print(f"正在从 {self.models_api_url} 获取可用模型列表...")
         try:
-            # 在请求中也使用令牌管理器中的代理设置
-            response = requests.get(
-                self.models_api_url,
-                headers=headers,
+            # 使用新的 request_with_auto_proxy 函数
+            response = request_with_auto_proxy(
+                method="GET",
+                url=self.models_api_url,
                 timeout=15,
-                proxies=self.token_manager.proxies
+                proxy_url=self.token_manager.proxy_url,
+                headers=headers
             )
             response.raise_for_status()
 
@@ -93,7 +96,7 @@ class OCAChatModel(BaseChatModel):
             else:
                 print(f"成功获取到 {len(self.available_models)} 个可用模型。")
 
-        except requests.exceptions.RequestException as e:
+        except ConnectionError as e:
             print(f"错误: 调用模型 API 时出错: {e}")
             if self.model:
                 self.available_models = [self.model]
@@ -159,27 +162,33 @@ class OCAChatModel(BaseChatModel):
         headers = self._build_headers()
         payload = self._build_payload(messages, stream=True, **kwargs)
 
-        with requests.post(
-            self.api_url,
-            headers=headers,
-            json=payload,
-            stream=True,
-            timeout=30,
-            proxies=self.token_manager.proxies
-        ) as response:
+        try:
+            response = request_with_auto_proxy(
+                method="POST",
+                url=self.api_url,
+                timeout=30,
+                proxy_url=self.token_manager.proxy_url,
+                headers=headers,
+                json=payload,
+                stream=True
+            )
             response.raise_for_status()
-            for line in response.iter_lines():
-                if line.startswith(b'data: '):
-                    line_data = line[len(b'data: '):].strip()
-                    if line_data == b'[DONE]': break
-                    if not line_data: continue
-                    try:
-                        chunk_data = json.loads(line_data)
-                        delta = chunk_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                        if delta:
-                            yield ChatGenerationChunk(message=AIMessageChunk(content=delta))
-                    except json.JSONDecodeError:
-                        continue
+        except ConnectionError as e:
+            print(f"流式 API 请求失败: {e}")
+            raise
+
+        for line in response.iter_lines():
+            if line.startswith(b'data: '):
+                line_data = line[len(b'data: '):].strip()
+                if line_data == b'[DONE]': break
+                if not line_data: continue
+                try:
+                    chunk_data = json.loads(line_data)
+                    delta = chunk_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if delta:
+                        yield ChatGenerationChunk(message=AIMessageChunk(content=delta))
+                except json.JSONDecodeError:
+                    continue
 
     async def _astream(
         self,
@@ -252,7 +261,13 @@ if __name__ == '__main__':
             print(f"\n--- 检测到 {len(chat_model.available_models)} 个可用模型 ---")
             for i, model_id in enumerate(chat_model.available_models):
                 print(f"{i+1}. {model_id}")
-            print(f"--- 当前使用的模型: {chat_model.model} ---\n")
+            
+            # 尝试使用 oca/gpt-4.1 模型，如果可用
+            if "oca/gpt-4.1" in chat_model.available_models:
+                chat_model.model = "oca/gpt-4.1"
+                print(f"--- 切换到模型: {chat_model.model} ---\n")
+            else:
+                print(f"--- 当前使用的模型: {chat_model.model} ---\n")
 
             if not chat_model.available_models:
                 print("错误：没有可用的模型，无法执行调用测试。")
