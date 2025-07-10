@@ -17,17 +17,20 @@
 
 ```
 .
-├── custom_llm.py             # 核心文件：包含 CustomOauthLLM 类及使用示例
-├── oauth2_token_manager.py   # 认证模块：负责所有 OAuth2 令牌的获取、刷新和持久化
-├── .env                      # 配置文件：存储所有凭证和参数 (需手动创建)
-└── README.md                 # 本说明文件
+├── app.py                    # Streamlit 聊天机器人 UI
+├── custom_llm.py             # 核心文件：CustomOauthChatModel 类
+├── oauth2_token_manager.py   # 认证模块：处理 OAuth2 令牌
+├── .env                      # 配置文件 (需手动创建)
+├── README.md                 # 本说明文件
+├── pyproject.toml            # 项目配置文件 (用于 uv)
+└── uv.lock                   # 锁定的依赖版本
 ```
 
 ## 🚀 安装与配置
 
 **1. 环境准备**
 
-建议使用虚拟环境来管理项目依赖。
+本项目使用 `uv` 进行包管理。建议在虚拟环境中操作。
 
 ```bash
 # 创建虚拟环境
@@ -35,14 +38,17 @@ python -m venv .venv
 
 # 激活虚拟环境 (Linux/macOS)
 source .venv/bin/activate
+
+# 如果您没有 uv，请先安装
+pip install uv
 ```
 
-**2. 安装依赖**
+**2. 同步依赖**
 
-本项目需要以下 Python 库：
+使用 `uv.lock` 文件来精确同步所有依赖，确保环境一致性。
 
 ```bash
-pip install langchain-core python-dotenv requests httpx
+uv sync
 ```
 
 **3. 创建并配置 `.env` 文件**
