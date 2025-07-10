@@ -3,6 +3,7 @@ import os
 import json
 import requests
 import httpx
+from httpx import AsyncHTTPTransport, Proxy
 from typing import Any, List, Mapping, Optional, Iterator, AsyncIterator
 
 # --- LangChain Imports ---
@@ -12,7 +13,7 @@ from langchain_core.messages import BaseMessage, AIMessage, AIMessageChunk, Huma
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 # --- Local Imports ---
-from oca_oauth2_token_manager import OCAOauth2TokenManager, request_with_auto_proxy
+from oca_oauth2_token_manager import OCAOauth2TokenManager, request_with_auto_proxy, async_request_with_auto_proxy
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """将 LangChain 的 BaseMessage 对象转换为 API 需要的字典格式。"""
@@ -37,19 +38,11 @@ class OCAChatModel(BaseChatModel):
     # --- 动态获取的数据 ---
     available_models: List[str] = []
 
-    # --- HTTP 客户端 ---
-    # 异步客户端将在初始化时根据代理设置进行配置
-    async_client: Optional[httpx.AsyncClient] = None
-
     def __init__(self, **data: Any):
         """
-        初始化模型，使用代理设置异步客户端，并获取可用模型列表。
+        初始化模型，并获取可用模型列表。
         """
         super().__init__(**data)
-        # 直接将令牌管理器中与 httpx 兼容的代理字典传递给异步客户端
-        # 如果没有代理，则 self.token_manager.proxies 会是一个空字典，httpx 会将其视作无代理
-        self.async_client = httpx.AsyncClient()
-
         self.fetch_available_models()
 
         if not self.model and self.available_models:
@@ -62,7 +55,7 @@ class OCAChatModel(BaseChatModel):
                 f"可用模型: {', '.join(self.available_models)}"
             )
 
-    
+
 
     def fetch_available_models(self):
         """调用 API 获取并填充可用模型列表。"""
@@ -82,7 +75,7 @@ class OCAChatModel(BaseChatModel):
             response = request_with_auto_proxy(
                 method="GET",
                 url=self.models_api_url,
-                timeout=15,
+                timeout=self.token_manager.timeout,
                 proxy_url=self.token_manager.proxy_url,
                 headers=headers
             )
@@ -166,7 +159,7 @@ class OCAChatModel(BaseChatModel):
             response = request_with_auto_proxy(
                 method="POST",
                 url=self.api_url,
-                timeout=30,
+                timeout=self.token_manager.timeout,
                 proxy_url=self.token_manager.proxy_url,
                 headers=headers,
                 json=payload,
@@ -197,26 +190,49 @@ class OCAChatModel(BaseChatModel):
         run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
         **kwargs: Any
     ) -> AsyncIterator[ChatGenerationChunk]:
-        if not self.async_client:
-            raise RuntimeError("异步客户端未初始化。这是一个不应发生的问题。")
-
         headers = self._build_headers()
         payload = self._build_payload(messages, stream=True, **kwargs)
 
-        async with self.async_client.stream("POST", self.api_url, headers=headers, json=payload, timeout=30) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if line.startswith('data: '):
-                    line_data = line[len('data: '):].strip()
-                    if line_data == '[DONE]': break
-                    if not line_data: continue
-                    try:
-                        chunk_data = json.loads(line_data)
-                        delta = chunk_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                        if delta:
-                            yield ChatGenerationChunk(message=AIMessageChunk(content=delta))
-                    except json.JSONDecodeError:
-                        continue
+        async def _stream_request(client: httpx.AsyncClient):
+            async with client.stream("POST", self.api_url, headers=headers, json=payload, timeout=self.token_manager.timeout) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith('data: '):
+                        line_data = line[len('data: '):].strip()
+                        if line_data == '[DONE]': break
+                        if not line_data: continue
+                        try:
+                            chunk_data = json.loads(line_data)
+                            delta = chunk_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            if delta:
+                                yield ChatGenerationChunk(message=AIMessageChunk(content=delta))
+                        except json.JSONDecodeError:
+                            continue
+
+        # 尝试直连
+        print(f"正在尝试直连 {self.api_url}")
+        try:
+            async with httpx.AsyncClient() as client:
+                async for chunk in _stream_request(client):
+                    yield chunk
+            print(f"直连 {self.api_url} 成功。")
+            return
+        except httpx.RequestError as e:
+            print(f"直连 {self.api_url} 失败: {e}")
+            if self.token_manager.proxy_url:
+                # 如果直连失败且配置了代理，则尝试使用代理
+                print(f"直连失败，尝试通过代理 {self.token_manager.proxy_url} 连接 {self.api_url}")
+                try:
+                    async with httpx.AsyncClient(proxy=self.token_manager.proxy_url) as proxy_client:
+                        async for chunk in _stream_request(proxy_client):
+                            yield chunk
+                    print(f"通过代理 {self.api_url} 成功。")
+                    return
+                except httpx.RequestError as proxy_e:
+                    print(f"通过代理 {self.api_url} 失败: {proxy_e}")
+                    raise ConnectionError(f"无法连接到 {self.api_url}。直连和代理模式均失败。") from proxy_e
+            else:
+                raise ConnectionError(f"无法连接到 {self.api_url}。请检查您的网络设置。") from e
 
     def _generate(
         self,
@@ -261,7 +277,7 @@ if __name__ == '__main__':
             print(f"\n--- 检测到 {len(chat_model.available_models)} 个可用模型 ---")
             for i, model_id in enumerate(chat_model.available_models):
                 print(f"{i+1}. {model_id}")
-            
+
             # 尝试使用 oca/gpt-4.1 模型，如果可用
             if "oca/gpt-4.1" in chat_model.available_models:
                 chat_model.model = "oca/gpt-4.1"

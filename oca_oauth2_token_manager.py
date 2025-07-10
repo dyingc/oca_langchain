@@ -1,7 +1,8 @@
 import os
 import requests
+import httpx
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, AsyncIterator
 from urllib.parse import urlparse
 from enum import Enum
 
@@ -27,8 +28,8 @@ def request_with_auto_proxy(method: str, url: str, timeout: float, proxy_url: Op
         if proxy_url:
             # 如果直连失败且配置了代理，则尝试使用代理
             proxies = {
-                "http://": proxy_url,
-                "https://": proxy_url,
+                "http": proxy_url,
+                "https": proxy_url,
             }
             print(f"直连失败，尝试通过代理 {proxy_url} 连接 {url}")
             try:
@@ -37,6 +38,40 @@ def request_with_auto_proxy(method: str, url: str, timeout: float, proxy_url: Op
                 print(f"通过代理 {url} 成功。")
                 return response
             except requests.exceptions.RequestException as proxy_e:
+                print(f"通过代理 {url} 失败: {proxy_e}")
+                raise ConnectionError(
+                    f"无法连接到 {url}。直连和代理模式均失败。请检查您的网络设置或代理配置。"
+                ) from proxy_e
+        else:
+            # 如果没有配置代理，则直接抛出直连失败的异常
+            raise ConnectionError(
+                f"无法连接到 {url}。请检查您的网络设置。"
+            ) from e
+
+async def async_request_with_auto_proxy(method: str, url: str, timeout: float, proxy_url: Optional[str], **kwargs: Any) -> httpx.Response:
+    """
+    封装 httpx 异步请求，先尝试直连，如果失败且配置了代理，则自动使用代理重试。
+    """
+    # 尝试直连
+    print(f"正在尝试直连 {url}")
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.request(method, url, timeout=timeout, **kwargs)
+        response.raise_for_status()
+        print(f"直连 {url} 成功。")
+        return response
+    except httpx.RequestError as e:
+        print(f"直连 {url} 失败: {e}")
+        if proxy_url:
+            # 如果直连失败且配置了代理，则尝试使用代理
+            print(f"直连失败，尝试通过代理 {proxy_url} 连接 {url}")
+            try:
+                async with httpx.AsyncClient(proxy=proxy_url) as client:
+                    response = await client.request(method, url, timeout=timeout, **kwargs)
+                response.raise_for_status()
+                print(f"通过代理 {url} 成功。")
+                return response
+            except httpx.RequestError as proxy_e:
                 print(f"通过代理 {url} 失败: {proxy_e}")
                 raise ConnectionError(
                     f"无法连接到 {url}。直连和代理模式均失败。请检查您的网络设置或代理配置。"
