@@ -32,6 +32,7 @@ class OCAChatModel(BaseChatModel):
     temperature: float
     models_api_url: Optional[str] = None
     llm_request_timeout: float = 120.0 # LLM 请求的超时时间，默认为 120 秒
+    _debug: bool = False # Debug flag
 
     # --- 核心组件 ---
     token_manager: OCAOauth2TokenManager
@@ -44,11 +45,14 @@ class OCAChatModel(BaseChatModel):
         初始化模型，并获取可用模型列表。
         """
         super().__init__(**data)
+        # Pass debug flag to token_manager
+        self.token_manager._debug = self._debug
         self.fetch_available_models()
 
         if not self.model and self.available_models:
             self.model = self.available_models[0]
-            print(f"未指定模型，使用默认模型: {self.model}")
+            if self._debug:
+                print(f"未指定模型，使用默认模型: {self.model}")
 
         if self.model and self.model not in self.available_models:
             raise ValueError(
@@ -61,7 +65,8 @@ class OCAChatModel(BaseChatModel):
     def fetch_available_models(self):
         """调用 API 获取并填充可用模型列表。"""
         if not self.models_api_url:
-            print("警告: 未配置 LLM_MODELS_API_URL，无法动态获取模型列表。")
+            if self._debug:
+                print("警告: 未配置 LLM_MODELS_API_URL，无法动态获取模型列表。")
             if self.model:
                 self.available_models = [self.model]
             return
@@ -70,7 +75,8 @@ class OCAChatModel(BaseChatModel):
             "Authorization": f"Bearer {self.token_manager.get_access_token()}",
             "Accept": "application/json",
         }
-        print(f"正在从 {self.models_api_url} 获取可用模型列表...")
+        if self._debug:
+            print(f"正在从 {self.models_api_url} 获取可用模型列表...")
         try:
             # 使用 token_manager 的 request 方法
             response = self.token_manager.request(
@@ -85,23 +91,28 @@ class OCAChatModel(BaseChatModel):
             self.available_models = [model.get("id") for model in models_data if model.get("id")]
 
             if not self.available_models:
-                print("警告: API 返回的模型列表为空。")
+                if self._debug:
+                    print("警告: API 返回的模型列表为空。")
             else:
-                print(f"成功获取到 {len(self.available_models)} 个可用模型。")
+                if self._debug:
+                    print(f"成功获取到 {len(self.available_models)} 个可用模型。")
 
         except ConnectionError as e:
-            print(f"错误: 调用模型 API 时出错: {e}")
+            if self._debug:
+                print(f"错误: 调用模型 API 时出错: {e}")
             if self.model:
                 self.available_models = [self.model]
-                print(f"将回退到使用 .env 文件中指定的模型: {self.model}")
+                if self._debug:
+                    print(f"将回退到使用 .env 文件中指定的模型: {self.model}")
             else:
                  self.available_models = []
         except json.JSONDecodeError:
-            print("错误: 解析模型 API 响应失败，响应不是有效的 JSON 格式。")
+            if self._debug:
+                print("错误: 解析模型 API 响应失败，响应不是有效的 JSON 格式。")
             self.available_models = []
 
     @classmethod
-    def from_env(cls, token_manager: OCAOauth2TokenManager) -> OCAChatModel:
+    def from_env(cls, token_manager: OCAOauth2TokenManager, debug: bool = False) -> OCAChatModel:
         """通过环境变量和 Token Manager 实例化聊天模型。"""
         api_url = os.getenv("LLM_API_URL")
         model = os.getenv("LLM_MODEL_NAME", "")
@@ -121,7 +132,8 @@ class OCAChatModel(BaseChatModel):
             temperature=temperature,
             token_manager=token_manager,
             models_api_url=models_api_url,
-            llm_request_timeout=llm_request_timeout
+            llm_request_timeout=llm_request_timeout,
+            _debug=debug
         )
 
     @property
@@ -245,15 +257,22 @@ if __name__ == '__main__':
     import asyncio
     import yaml
 
+    # Set debug flag based on an environment variable or a direct setting
+    # For testing, let's assume we want debug output
+    debug_mode = os.getenv("DEBUG_MODE", "False").lower() == "true"
+
     async def main():
-        print("--- 开始执行自定义聊天模型调用测试 ---")
+        if debug_mode:
+            print("--- 开始执行自定义聊天模型调用测试 ---")
         dotenv_path = ".env"
         config_path = "config.yaml"
         if not os.path.exists(dotenv_path):
-            print(f"错误: {dotenv_path} 文件未找到。")
+            if debug_mode:
+                print(f"错误: {dotenv_path} 文件未找到。")
             return
         if not os.path.exists(config_path):
-            print(f"错误: {config_path} 文件未找到。")
+            if debug_mode:
+                print(f"错误: {config_path} 文件未找到。")
             return
 
         try:
@@ -264,50 +283,65 @@ if __name__ == '__main__':
             # 1. 初始化 Token Manager 和 Chat Model
             #    网络/代理检查在令牌管理器内部自动完成。
             #    聊天模型随后会继承代理设置。
-            token_manager = OCAOauth2TokenManager(dotenv_path=dotenv_path)
-            chat_model = OCAChatModel.from_env(token_manager)
+            token_manager = OCAOauth2TokenManager(dotenv_path=dotenv_path, debug=debug_mode)
+            chat_model = OCAChatModel.from_env(token_manager, debug=debug_mode)
 
             # 2. 打印获取到的模型信息
-            print(f"\n--- 检测到 {len(chat_model.available_models)} 个可用模型 ---")
-            for i, model_id in enumerate(chat_model.available_models):
-                print(f"{i+1}. {model_id}")
+            if debug_mode:
+                print(f"\n--- 检测到 {len(chat_model.available_models)} 个可用模型 ---")
+                for i, model_id in enumerate(chat_model.available_models):
+                    print(f"{i+1}. {model_id}")
 
             # 尝试使用 oca/gpt-4.1 模型，如果可用
             if "oca/gpt-4.1" in chat_model.available_models:
                 chat_model.model = "oca/gpt-4.1"
-                print(f"--- 切换到模型: {chat_model.model} ---\n")
+                if debug_mode:
+                    print(f"--- 切换到模型: {chat_model.model} ---\n")
             else:
-                print(f"--- 当前使用的模型: {chat_model.model} ---\n")
+                if debug_mode:
+                    print(f"--- 当前使用的模型: {chat_model.model} ---\n")
 
             if not chat_model.available_models:
-                print("错误：没有可用的模型，无法执行调用测试。")
+                if debug_mode:
+                    print("错误：没有可用的模型，无法执行调用测试。")
                 return
 
             # 3. 准备输入消息
             question_messages = [HumanMessage(content=test_prompt)]
 
             # 4. 执行各种调用测试
-            print("\n--- 1. 测试同步流式调用 (stream) ---")
-            print(f"问题: {question_messages[0].content}")
-            print("模型回复 (流式): ")
+            if debug_mode:
+                print("\n--- 1. 测试同步流式调用 (stream) ---")
+                print(f"问题: {question_messages[0].content}")
+                print("模型回复 (流式): ")
             for chunk in chat_model.stream(question_messages, max_tokens=100):
                 print(chunk.content, end="", flush=True)
-            print("\n")
+            if debug_mode:
+                print("\n")
 
-            print("--- 2. 测试同步非流式调用 (invoke) ---")
-            response = chat_model.invoke(question_messages, max_tokens=100)
-            print(f"问题: {question_messages[0].content}")
-            print(f"模型回复 (非流式):\n{response.content}\n")
+            if debug_mode:
+                print("--- 2. 测试同步非流式调用 (invoke) ---")
+                print(f"问题: {question_messages[0].content}")
+                print(f"模型回复 (非流式):\n{response.content}\n")
+            else:
+                response = chat_model.invoke(question_messages, max_tokens=100)
+                # In non-debug mode, only print the response content
+                print(response.content)
 
-            print("--- 3. 测试异步流式调用 (astream) ---")
-            print(f"问题: {question_messages[0].content}")
-            print("模型回复 (异步流式): ")
+
+            if debug_mode:
+                print("--- 3. 测试异步流式调用 (astream) ---")
+                print(f"问题: {question_messages[0].content}")
+                print("模型回复 (异步流式): ")
             async for chunk in chat_model.astream(question_messages, max_tokens=100):
                 print(chunk.content, end="", flush=True)
-            print("\n")
+            if debug_mode:
+                print("\n")
 
         except Exception as e:
-            print(f"\n执行过程中发生错误: {e}")
+            if debug_mode:
+                print(f"\n执行过程中发生错误: {e}")
 
     asyncio.run(main())
-    print("--- 测试执行结束 ---")
+    if debug_mode:
+        print("--- 测试执行结束 ---")
