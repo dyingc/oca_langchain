@@ -1,11 +1,16 @@
 import os
 import streamlit as st
-import streamlit.components.v1 as components # Added this line
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
+import yaml
 
 from langchain_core.messages import AIMessage, HumanMessage
 from oca_llm import OCAChatModel
 from oca_oauth2_token_manager import OCAOauth2TokenManager
+
+# --- Load configuration ---
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
 
 # --- 1. App Configuration ---
 st.set_page_config(page_title="OAuth2 Chatbot", page_icon="🤖")
@@ -44,7 +49,7 @@ with st.sidebar:
     # System Prompt
     custom_system_prompt = st.text_area(
         "系统提示 (System Prompt)",
-        value=os.getenv("LLM_SYSTEM_PROMPT", "You are a helpful assistant."),
+        value=config["llm_prompts"]["system_prompt"],
         height=150
     )
 
