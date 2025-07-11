@@ -1,5 +1,6 @@
 import os
 import streamlit as st
+import streamlit.components.v1 as components # Added this line
 from dotenv import load_dotenv
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -97,14 +98,58 @@ with st.sidebar:
 st.session_state.chat_model.model = selected_model
 st.session_state.chat_model.temperature = custom_temperature
 
+# Helper function for copy button
+def copy_button(text_to_copy, key):
+    """
+    Generates a copy button that copies the given text to the clipboard.
+    """
+    # Escape single quotes and newlines for JavaScript string literal
+    escaped_text = text_to_copy.replace("'", "\'").replace("\n", "\\n")
+    unique_id = f"copy_button_{key}"
+    components.html(
+        f"""
+        <button id="{unique_id}" onclick="copyTextToClipboard('{escaped_text}')">复制</button>
+        <script>
+        function copyTextToClipboard(text) {{
+            navigator.clipboard.writeText(text).then(function() {{
+                console.log('Async: Copying to clipboard was successful!');
+            }}, function(err) {{
+                console.error('Async: Could not copy text: ', err);
+            }});
+        }}
+        </script>
+        <style>
+            #{unique_id} {{
+                background-color: #4CAF50; /* Green */
+                border: none;
+                color: white;
+                padding: 5px 10px;
+                text-align: center;
+                text-decoration: none;
+                display: inline-block;
+                font-size: 12px;
+                margin-left: 10px;
+                cursor: pointer;
+                border-radius: 4px;
+            }}
+            #{unique_id}:hover {{
+                background-color: #45a049;
+            }}
+        </style>
+        """,
+        height=30
+    )
+
 # --- 6. Display Chat History ---
-for message in st.session_state.chat_history:
+for i, message in enumerate(st.session_state.chat_history):
     if isinstance(message, AIMessage):
         with st.chat_message("AI"):
             st.write(message.content)
+            copy_button(message.content, f"ai_hist_copy_{i}")
     elif isinstance(message, HumanMessage):
         with st.chat_message("Human"):
             st.write(message.content)
+            copy_button(message.content, f"human_hist_copy_{i}")
 
 # --- 7. User Input and Chat Logic ---
 user_query = st.chat_input("请输入您的问题...")
@@ -112,6 +157,7 @@ if user_query:
     st.session_state.chat_history.append(HumanMessage(content=user_query))
     with st.chat_message("Human"):
         st.write(user_query)
+        copy_button(user_query, f"human_new_copy_{len(st.session_state.chat_history) - 1}")
 
     with st.chat_message("AI"):
         response_placeholder = st.empty()
@@ -131,5 +177,6 @@ if user_query:
                 response_placeholder.markdown(full_response + "▌")
             response_placeholder.markdown(full_response)
             st.session_state.chat_history.append(AIMessage(content=full_response))
+            copy_button(full_response, f"ai_new_copy_{len(st.session_state.chat_history) - 1}") # Add copy button here
         except Exception as e:
             st.error(f"调用API时出错: {e}")
