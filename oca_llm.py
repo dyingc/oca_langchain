@@ -243,15 +243,24 @@ class OCAChatModel(BaseChatModel):
 # --- 如何使用 ---
 if __name__ == '__main__':
     import asyncio
+    import yaml
 
     async def main():
         print("--- 开始执行自定义聊天模型调用测试 ---")
         dotenv_path = ".env"
+        config_path = "config.yaml"
         if not os.path.exists(dotenv_path):
             print(f"错误: {dotenv_path} 文件未找到。")
             return
+        if not os.path.exists(config_path):
+            print(f"错误: {config_path} 文件未找到。")
+            return
 
         try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            test_prompt = config["llm_prompts"]["test_prompt"]
+
             # 1. 初始化 Token Manager 和 Chat Model
             #    网络/代理检查在令牌管理器内部自动完成。
             #    聊天模型随后会继承代理设置。
@@ -275,7 +284,7 @@ if __name__ == '__main__':
                 return
 
             # 3. 准备输入消息
-            question_messages = [HumanMessage(content="你好，请用 Python 写一个 Hello World。")]
+            question_messages = [HumanMessage(content=test_prompt)]
 
             # 4. 执行各种调用测试
             print("\n--- 1. 测试同步流式调用 (stream) ---")
