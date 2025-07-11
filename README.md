@@ -1,32 +1,34 @@
 # LangChain 自定义 LLM 与 OAuth2 认证
 
-本项目实现了一个功能完备的自定义 LangChain `LLM` 类，专门用于与需要 OAuth2 认证（特别是通过刷新令牌 `Refresh Token` 流程）的语言模型 API 进行交互。
+本项目实现了一个功能完备的自定义 LangChain `LLM` 类，并新增了 OpenAI 兼容的 FastAPI 服务，方便将本地/内网模型直接当作 “自托管 OpenAI” 使用。
 
-它解决了在 LangChain 生态中集成需要动态令牌管理的私有或受保护 LLM 服务的核心问题。
+它解决了在 LangChain 生态中集成需要动态令牌管理的私有或受保护 LLM 服务、以及对接多端 OpenAI SDK 的核心问题。
 
 ## ✨ 主要特性
 
-- **完整的 OAuth2 刷新令牌流程**: 自动使用 `Refresh Token` 来获取临时的 `Access Token`，并支持令牌轮换（Token Rotation），将新的 `Refresh Token` 持久化回 `.env` 文件。
-- **令牌持久化与缓存**: 成功获取的 `Access Token` 会被写入 `.env` 文件，在重启脚本后，只要令牌未过期即可直接复用，避免了不必要的刷新请求。
-- **无缝 LangChain 集成**: 严格遵循 LangChain 的 `LLM` 基类规范，可以像使用任何官方 LLM 一样调用 `invoke`, `stream`, `astream` 等方法。
-- **支持流式响应 (Streaming)**: 完全实现了对 Server-Sent Events (SSE) 的同步和异步解析，可以实时获取模型输出。
-- **配置驱动**: 所有敏感信息和模型参数（如 API 地址、模型名称、温度等）都通过 `.env` 文件进行管理，使代码保持干净和灵活。
-- **异步支持**: 同时提供了同步 (`requests`) 和异步 (`httpx`) 的实现，可以轻松集成到现代的异步 Python 应用中。
-- **智能网络重试与超时**: 针对不同的 API 请求（如获取模型列表、LLM 推理），采用不同的网络重试策略和超时设置，优化了在代理环境下的性能和稳定性。
+- **完整的 OAuth2 刷新令牌流程**：自动使用 `Refresh Token` 来获取临时 `Access Token`，并支持令牌轮换（Token Rotation），将新的 `Refresh Token` 持久化到 `.env`。
+- **OpenAI 兼容 FastAPI 服务**：提供 `/v1/models` 与 `/v1/chat/completions` 端点，可直接替代 OpenAI，支持流式 & 非流式。
+- **令牌持久化与缓存**：成功获取的 `Access Token` 会被写入 `.env`，重启后如未过期即可直接复用。
+- **无缝 LangChain 集成**：遵循 `BaseChatModel`，正常调用 `invoke / stream / astream`。
+- **支持流式响应 (Streaming)**：完整 SSE 解析，实时获取模型输出。
+- **配置驱动**：所有敏感信息、模型参数均写入 `.env`。
+- **异步支持**：同步 `requests` + 异步 `httpx` 双实现。
+- **智能网络重试与超时**：按场景区分重试策略与超时，兼顾稳定与性能。
 
 ## 📂 文件结构
-
 ```
 .
 ├── app.py                    # Streamlit 聊天机器人 UI
-├── oca_llm.py                # 核心文件：OCAChatModel 类
-├── oca_oauth2_token_manager.py   # 认证模块：处理 OAuth2 令牌
-├── .env                      # 配置文件 (需手动创建)
-├── README.md                 # 本说明文件
-├── pyproject.toml            # 项目配置文件 (用于 uv)
-└── uv.lock                   # 锁定的依赖版本
+├── api.py                    # OpenAI 兼容 FastAPI 服务
+├── oca_llm.py                # 核心：OCAChatModel
+├── oca_oauth2_token_manager.py   # OAuth2 令牌管理
+├── run_api.sh                # 一键启动 API 服务
+├── run_ui.sh                 # 一键启动 Streamlit UI
+├── .env                      # 环境配置 (自行创建)
+├── README.md                 # 本文件
+├── pyproject.toml            # 依赖定义 (uv)
+└── uv.lock                   # 锁定依赖版本
 ```
-
 ## 🚀 安装与配置
 
 **1. 环境准备**
@@ -109,6 +111,7 @@ python oca_llm.py
 2.  同步非流式调用 (`llm.invoke`)
 3.  异步流式调用 (`llm.astream`)
 
+
 ### 启动交互式聊天机器人 UI
 
 我们提供了一个基于 Streamlit 的交互式 Web UI。
@@ -149,3 +152,42 @@ streamlit run app.py
   - **模型列表动态获取**: 在初始化时会尝试从配置的 `LLM_MODELS_API_URL` 获取可用模型列表，并支持在 UI 中手动刷新。
   - **独立 LLM 请求超时**: LLM 推理请求现在使用 `LLM_REQUEST_TIMEOUT` 配置的超时时间，以适应长时间的生成任务。
 
+### 启动 OpenAI 兼容 API 服务
+
+```bash
+# 方式 1：uvicorn 直接启动
+uvicorn api:app --host 0.0.0.0 --port 8000
+
+# 方式 2：一键脚本
+bash run_api.sh
+```
+服务默认监听 **8000** 端口。
+
+**主要端点**
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET  | /v1/models            | 获取可用模型列表 |
+| POST | /v1/chat/completions  | 聊天补全（支持 `stream=true`） |
+
+**快速调用示例**
+
+非流式：
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model":"your-model-name",
+        "messages":[{"role":"user","content":"你好！"}]
+      }'
+```
+流式 SSE：
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model":"your-model-name",
+        "messages":[{"role":"user","content":"讲个笑话"}],
+        "stream":true
+      }'
+```
+Python：
