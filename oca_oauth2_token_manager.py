@@ -75,7 +75,7 @@ class OCAOauth2TokenManager:
                 return None
         return {} # direct connection
 
-    def request(self, method: str, url: str, _do_retry: bool = True, **kwargs: Any) -> requests.Response:
+    def request(self, method: str, url: str, _do_retry: bool = True, request_timeout: Optional[float] = None, **kwargs: Any) -> requests.Response:
         """
         执行一个同步请求。
         如果 _do_retry 为 True，它会根据当前的 self.connection_mode 尝试连接。如果失败，它会切换模式并立即重试一次。
@@ -95,7 +95,7 @@ class OCAOauth2TokenManager:
             primary_proxies = self._get_proxies(primary_mode)
 
         try:
-            response = requests.request(method, url, timeout=self.timeout, proxies=primary_proxies, **kwargs)
+            response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=primary_proxies, **kwargs)
             response.raise_for_status()
             print(f"使用 {primary_mode.value} 模式连接 {url} 成功。")
             return response
@@ -114,7 +114,7 @@ class OCAOauth2TokenManager:
             # 尝试第二次
             print(f"立即使用 {secondary_mode.value} 模式重试...")
             try:
-                response = requests.request(method, url, timeout=self.timeout, proxies=secondary_proxies, **kwargs)
+                response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=secondary_proxies, **kwargs)
                 response.raise_for_status()
                 print(f"使用 {secondary_mode.value} 模式重试成功。")
                 return response
@@ -122,7 +122,7 @@ class OCAOauth2TokenManager:
                 print(f"使用 {secondary_mode.value} 模式重试失败: {e2}")
                 raise ConnectionError(f"无法连接到 {url}。{primary_mode.value} 和 {secondary_mode.value} 模式均失败。") from e2
 
-    async def async_stream_request(self, method: str, url: str, _do_retry: bool = True, **kwargs: Any) -> AsyncIterator[str]:
+    async def async_stream_request(self, method: str, url: str, _do_retry: bool = True, request_timeout: Optional[float] = None, **kwargs: Any) -> AsyncIterator[str]:
         """
         执行一个异步流式请求。
         如果 _do_retry 为 True，逻辑与同步的 request 方法相同：尝试主模式，失败则切换并用备用模式重试。
@@ -142,7 +142,7 @@ class OCAOauth2TokenManager:
 
         try:
             async with httpx.AsyncClient(proxy=primary_proxy_config) as client:
-                async with client.stream(method, url, timeout=self.timeout, **kwargs) as response:
+                async with client.stream(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, **kwargs) as response:
                     response.raise_for_status()
                     print(f"使用 {primary_mode.value} 模式的流式连接 {url} 成功。")
                     async for line in response.aiter_lines():
@@ -164,7 +164,7 @@ class OCAOauth2TokenManager:
             print(f"立即使用 {secondary_mode.value} 模式重试流式请求...")
             try:
                 async with httpx.AsyncClient(proxy=secondary_proxy_config) as client:
-                    async with client.stream(method, url, timeout=self.timeout, **kwargs) as response:
+                    async with client.stream(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, **kwargs) as response:
                         response.raise_for_status()
                         print(f"使用 {secondary_mode.value} 模式的流式重试成功。")
                         async for line in response.aiter_lines():

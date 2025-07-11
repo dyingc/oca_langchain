@@ -12,14 +12,15 @@
 - **支持流式响应 (Streaming)**: 完全实现了对 Server-Sent Events (SSE) 的同步和异步解析，可以实时获取模型输出。
 - **配置驱动**: 所有敏感信息和模型参数（如 API 地址、模型名称、温度等）都通过 `.env` 文件进行管理，使代码保持干净和灵活。
 - **异步支持**: 同时提供了同步 (`requests`) 和异步 (`httpx`) 的实现，可以轻松集成到现代的异步 Python 应用中。
+- **智能网络重试与超时**: 针对不同的 API 请求（如获取模型列表、LLM 推理），采用不同的网络重试策略和超时设置，优化了在代理环境下的性能和稳定性。
 
 ## 📂 文件结构
 
 ```
 .
 ├── app.py                    # Streamlit 聊天机器人 UI
-├── custom_llm.py             # 核心文件：CustomOauthChatModel 类
-├── oauth2_token_manager.py   # 认证模块：处理 OAuth2 令牌
+├── oca_llm.py                # 核心文件：OCAChatModel 类
+├── oca_oauth2_token_manager.py   # 认证模块：处理 OAuth2 令牌
 ├── .env                      # 配置文件 (需手动创建)
 ├── README.md                 # 本说明文件
 ├── pyproject.toml            # 项目配置文件 (用于 uv)
@@ -68,11 +69,25 @@ LLM_API_URL="https://your-llm-api-endpoint/v1/chat/completions"
 # 要使用的模型名称
 LLM_MODEL_NAME="your-model-name"
 
+# 获取可用模型列表的 API 端点
+LLM_MODELS_API_URL=""
+
 # 默认的系统提示 (System Prompt)
 LLM_SYSTEM_PROMPT="You are a helpful assistant."
 
 # 默认的采样温度 (0.0 到 2.0 之间)
 LLM_TEMPERATURE="0.7"
+
+# LLM 请求的超时时间 (单位: 秒，支持浮点数，建议 60 秒及以上。可选)
+LLM_REQUEST_TIMEOUT="120"
+
+# --- 网络配置 ---
+# 如果应用无法直接访问 OAuth 或 LLM API，请在此处指定 HTTP 代理服务器的地址
+# 例如: http://user:password@proxy.example.com:8080
+HTTP_PROXY_URL=""
+
+# 网络连接超时时间 (单位: 秒，支持浮点数，建议 2 秒及以上。此超时主要用于快速的 API 请求，如获取模型列表和刷新令牌。)
+CONNECTION_TIMEOUT="2"
 
 # --- 以下字段由程序自动管理 ---
 OAUTH_ACCESS_TOKEN=
@@ -83,10 +98,10 @@ OAUTH_ACCESS_TOKEN_EXPIRES_AT=
 
 ### 命令行测试
 
-配置好 `.env` 文件后，直接运行 `custom_llm.py` 即可启动原始的命令行测试程序：
+配置好 `.env` 文件后，直接运行 `oca_llm.py` 即可启动原始的命令行测试程序：
 
 ```bash
-python custom_llm.py
+python oca_llm.py
 ```
 
 脚本会依次演示三种调用方式：
@@ -114,19 +129,23 @@ streamlit run app.py
 
 ## 🤖 代码概览
 
-### `oauth2_token_manager.py`
+### `oca_oauth2_token_manager.py`
 
-- **`Oauth2TokenManager` 类**:
+- **`OCAOauth2TokenManager` 类**:
   - 这是项目的认证核心。它独立于 LangChain，专门负责管理令牌的整个生命周期。
   - 在初始化时，它会尝试从 `.env` 文件加载一个未过期的 `Access Token`。
   - `get_access_token()` 是其主要公共方法。当被调用时，它会检查内存中的令牌是否有效。如果无效或过期，则会自动触发 `_refresh_tokens()` 方法。
   - `_refresh_tokens()` 方法负责执行与 OAuth2 服务器的通信，用 `Refresh Token` 换取新的 `Access Token`，并处理返回的新 `Refresh Token`，最后将这些信息持久化到 `.env` 文件。
+  - **网络连接管理**: 引入了智能网络重试机制，仅在获取模型列表和刷新令牌等快速操作时尝试切换直连/代理模式。LLM 推理请求则使用独立的、更长的超时时间，且不进行网络模式切换重试。
 
-### `custom_llm.py`
+### `oca_llm.py`
 
-- **`CustomOauthLLM` 类**:
-  - 继承自 LangChain 的 `LLM` 基类。
-  - 它不直接处理认证逻辑，而是在初始化时接收一个 `Oauth2TokenManager` 实例。
+- **`OCAChatModel` 类**:
+  - 继承自 LangChain 的 `BaseChatModel` 基类。
+  - 它不直接处理认证逻辑，而是在初始化时接收一个 `OCAOauth2TokenManager` 实例。
   - 在执行 API 调用（如 `_stream`, `_astream`）前，它会通过调用 `token_manager.get_access_token()` 来获取一个有效的令牌。
-  - 它实现了 LangChain 的标准方法，如 `_stream` 用于处理流式响应，`_call` 用于处理非流式响应，以及对应的异步版本。
+  - 它实现了 LangChain 的标准方法，如 `_stream` 用于处理流式响应，`_generate` 用于处理非流式响应，以及对应的异步版本。
   - `@classmethod from_env` 提供了一种便捷的方式来从环境变量实例化该类。
+  - **模型列表动态获取**: 在初始化时会尝试从配置的 `LLM_MODELS_API_URL` 获取可用模型列表，并支持在 UI 中手动刷新。
+  - **独立 LLM 请求超时**: LLM 推理请求现在使用 `LLM_REQUEST_TIMEOUT` 配置的超时时间，以适应长时间的生成任务。
+

@@ -31,6 +31,7 @@ class OCAChatModel(BaseChatModel):
     model: str
     temperature: float
     models_api_url: Optional[str] = None
+    llm_request_timeout: float = 120.0 # LLM 请求的超时时间，默认为 120 秒
 
     # --- 核心组件 ---
     token_manager: OCAOauth2TokenManager
@@ -106,6 +107,7 @@ class OCAChatModel(BaseChatModel):
         model = os.getenv("LLM_MODEL_NAME", "")
         temperature = float(os.getenv("LLM_TEMPERATURE", 0.7))
         models_api_url = os.getenv("LLM_MODELS_API_URL")
+        llm_request_timeout = float(os.getenv("LLM_REQUEST_TIMEOUT", 120.0))
 
         if not api_url:
             raise ValueError("错误: 请确保 .env 文件中包含 LLM_API_URL。")
@@ -118,7 +120,8 @@ class OCAChatModel(BaseChatModel):
             model=model,
             temperature=temperature,
             token_manager=token_manager,
-            models_api_url=models_api_url
+            models_api_url=models_api_url,
+            llm_request_timeout=llm_request_timeout
         )
 
     @property
@@ -161,7 +164,8 @@ class OCAChatModel(BaseChatModel):
                 headers=headers,
                 json=payload,
                 stream=True,
-                _do_retry=False
+                _do_retry=False,
+                request_timeout=self.llm_request_timeout
             )
             response.raise_for_status()
         except ConnectionError as e:
@@ -197,7 +201,8 @@ class OCAChatModel(BaseChatModel):
                 url=self.api_url,
                 headers=headers,
                 json=payload,
-                _do_retry=False
+                _do_retry=False,
+                request_timeout=self.llm_request_timeout
             ):
                 if line.startswith('data: '):
                     line_data = line[len('data: '):].strip()
