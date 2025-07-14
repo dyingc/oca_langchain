@@ -1,5 +1,5 @@
 [project]
-name = "oca"
+name = "core"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -20,4 +20,4 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ui", "oca"]
+include = ["ui", "core"]

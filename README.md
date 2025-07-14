@@ -20,8 +20,8 @@
 .
 ├── app.py                    # Streamlit 聊天机器人 UI
 ├── api.py                    # OpenAI 兼容 FastAPI 服务
-├── oca_llm.py                # 核心：OCAChatModel
-├── oca_oauth2_token_manager.py   # OAuth2 令牌管理
+├── core/llm.py                # 核心：OCAChatModel
+├── core/oauth2_token_manager.py   # OAuth2 令牌管理
 ├── run_api.sh                # 一键启动 API 服务
 ├── run_ui.sh                 # 一键启动 Streamlit UI
 ├── .env                      # 环境配置 (自行创建)
@@ -100,10 +100,10 @@ OAUTH_ACCESS_TOKEN_EXPIRES_AT=
 
 ### 命令行测试
 
-配置好 `.env` 文件后，直接运行 `oca_llm.py` 即可启动原始的命令行测试程序：
+配置好 `.env` 文件后，直接运行 `core/llm.py` 即可启动原始的命令行测试程序：
 
 ```bash
-python oca_llm.py
+python core/llm.py
 ```
 
 脚本会依次演示三种调用方式：
@@ -132,7 +132,7 @@ streamlit run app.py
 
 ## 🤖 代码概览
 
-### `oca_oauth2_token_manager.py`
+### `core/oauth2_token_manager.py`
 
 - **`OCAOauth2TokenManager` 类**:
   - 这是项目的认证核心。它独立于 LangChain，专门负责管理令牌的整个生命周期。
@@ -141,7 +141,7 @@ streamlit run app.py
   - `_refresh_tokens()` 方法负责执行与 OAuth2 服务器的通信，用 `Refresh Token` 换取新的 `Access Token`，并处理返回的新 `Refresh Token`，最后将这些信息持久化到 `.env` 文件。
   - **网络连接管理**: 引入了智能网络重试机制，仅在获取模型列表和刷新令牌等快速操作时尝试切换直连/代理模式。LLM 推理请求则使用独立的、更长的超时时间，且不进行网络模式切换重试。
 
-### `oca_llm.py`
+### `core/llm.py`
 
 - **`OCAChatModel` 类**:
   - 继承自 LangChain 的 `BaseChatModel` 基类。

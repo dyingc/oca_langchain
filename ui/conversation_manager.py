@@ -7,7 +7,7 @@ from langchain.schema import HumanMessage, AIMessage
 # Add the project root to the Python path to resolve import issues
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from oca.llm import OCAChatModel
+from core.llm import OCAChatModel
 
 def initialize_session():
     """初始化 Streamlit session state。"""

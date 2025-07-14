@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage
-from oca.llm import OCAChatModel
-from oca.oauth2_token_manager import OCAOauth2TokenManager
+from core.llm import OCAChatModel
+from core.oauth2_token_manager import OCAOauth2TokenManager
 
 # --- Pydantic Models for OpenAI Compatibility ---
 

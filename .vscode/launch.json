@@ -23,7 +23,7 @@
             "name": "OCA LLM Test",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/oca_llm.py",
+            "program": "${workspaceFolder}/core/llm.py",
             "console": "integratedTerminal"
         }
     ]

@@ -5,8 +5,8 @@ import yaml
 import re
 
 from langchain_core.messages import AIMessage, HumanMessage
-from oca.llm import OCAChatModel
-from oca.oauth2_token_manager import OCAOauth2TokenManager
+from core.llm import OCAChatModel
+from core.oauth2_token_manager import OCAOauth2TokenManager
 from ui import conversation_manager as cm
 from ui import utils as ui_utils
 
