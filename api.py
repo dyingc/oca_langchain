@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage
-from oca_llm import OCAChatModel
-from oca_oauth2_token_manager import OCAOauth2TokenManager
+from oca.llm import OCAChatModel
+from oca.oauth2_token_manager import OCAOauth2TokenManager
 
 # --- Pydantic Models for OpenAI Compatibility ---
 
@@ -84,9 +84,9 @@ async def lifespan(app: FastAPI):
         print(f"FATAL: Failed to initialize core components: {e}")
         # 在这种情况下，应用将无法正常工作
         lifespan_objects["chat_model"] = None
-    
+
     yield
-    
+
     print("--- Cleaning up resources ---")
     lifespan_objects.clear()
 
@@ -130,7 +130,7 @@ def convert_to_langchain_messages(messages: List[ChatMessage]) -> List[BaseMessa
             lc_messages.append(AIMessage(content=content_str))
         elif msg.role == "system":
             lc_messages.append(SystemMessage(content=content_str))
-            
+
     return lc_messages
 
 # --- API Endpoints ---
@@ -157,13 +157,13 @@ async def create_chat_completion(request: ChatCompletionRequest):
             status_code=404,
             detail=f"Model '{request.model}' not found. Available models: {', '.join(chat_model.available_models)}"
         )
-    
+
     # 更新模型实例以使用请求的参数
     chat_model.model = request.model
     chat_model.temperature = request.temperature
 
     lc_messages = convert_to_langchain_messages(request.messages)
-    
+
     # --- 流式响应 ---
     if request.stream:
         async def stream_generator():
@@ -179,7 +179,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
                             )]
                         )
                         yield f"data: {stream_response.json()}\n\n"
-                
+
                 # 发送最后的 [DONE] 信号
                 final_chunk = ChatCompletionStreamResponse(
                     model=request.model,
@@ -211,7 +211,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
                 lc_messages,
                 max_tokens=request.max_tokens
             )
-            
+
             completion_response = ChatCompletionResponse(
                 model=request.model,
                 choices=[ChatCompletionChoice(

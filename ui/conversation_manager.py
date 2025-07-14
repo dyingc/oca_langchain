@@ -7,7 +7,7 @@ from langchain.schema import HumanMessage, AIMessage
 # Add the project root to the Python path to resolve import issues
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from oca_llm import OCAChatModel
+from oca.llm import OCAChatModel
 
 def initialize_session():
     """初始化 Streamlit session state。"""
@@ -36,9 +36,9 @@ def archive_current_chat():
 
     history = st.session_state.get("chat_history", [])
     system_prompt = st.session_state.get("custom_system_prompt", "")
-    
+
     current_title = st.session_state.conversations[key].get("title", "新聊天")
-    
+
     if current_title == "新聊天" and history and "chat_model" in st.session_state:
         title = generate_title(st.session_state.chat_model, history)
     else:
@@ -75,7 +75,7 @@ def generate_title(chat_model: OCAChatModel, messages: list) -> str:
     history_for_title = "\n".join(
         [f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in messages[:4]]
     )
-    
+
     prompt = f"""请根据以下对话内容，用中文生成一个5个字以内的、简洁明了的标题。请直接返回标题，不要包含任何多余的解释或标点符号。
 
 对话内容:

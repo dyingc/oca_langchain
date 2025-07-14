@@ -14,7 +14,7 @@ from langchain_core.messages import BaseMessage, AIMessage, AIMessageChunk, Huma
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 # --- Local Imports ---
-from oca_oauth2_token_manager import OCAOauth2TokenManager, ConnectionMode
+from .oauth2_token_manager import OCAOauth2TokenManager, ConnectionMode
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """将 LangChain 的 BaseMessage 对象转换为 API 需要的字典格式。"""
