@@ -14,17 +14,17 @@ class ConnectionMode(Enum):
 
 class OCAOauth2TokenManager:
     """
-    管理 OAuth2 令牌，包括自动刷新和持久化。
-    内置网络连通性检查和代理回退机制。
+    Manage OAuth2 tokens, including automatic refresh and persistence.
+    Includes built-in network connectivity check and proxy fallback mechanism.
     """
     def __init__(self, dotenv_path: str = ".env", debug: bool = False):
         """
-        初始化 Token 管理器。
-        - 加载配置
-        - 尝试从 .env 文件加载已有的有效 Access Token
+        Initialize Token Manager.
+        - Load configuration
+        - Try loading any existing valid Access Token from .env file
         """
         if not os.path.exists(dotenv_path):
-            raise FileNotFoundError(f"错误：指定的 .env 文件路径不存在 -> {dotenv_path}")
+            raise FileNotFoundError(f"Error: The specified .env file path does not exist -> {dotenv_path}")
 
         self.dotenv_path: str = dotenv_path
         load_dotenv(self.dotenv_path)
@@ -35,13 +35,13 @@ class OCAOauth2TokenManager:
         self._debug: bool = debug
 
         if not all([self.host, self.client_id]):
-            raise ValueError("错误：请确保 .env 文件中包含 OAUTH_HOST 和 OAUTH_CLIENT_ID。")
+            raise ValueError("Error: Please ensure .env contains both OAUTH_HOST and OAUTH_CLIENT_ID.")
 
         self.connection_mode: ConnectionMode = ConnectionMode.DIRECT
         self.access_token: Optional[str] = None
         self.expires_at: Optional[datetime] = None
 
-        # 网络超时时间：优先从env获取，否则默认2秒
+        # Network timeout: try to get from env, otherwise defaults to 2 seconds
         self.timeout: float = 20.0
         try:
             timeout_str = get_key(self.dotenv_path, "CONNECTION_TIMEOUT")
@@ -50,14 +50,14 @@ class OCAOauth2TokenManager:
         except Exception:
             pass
 
-        # 尝试从 .env 加载已存在的 access token
+        # Try loading any existing access token from .env
         self._load_token_from_env()
         if self._debug:
-            print("OcaOauth2TokenManager 初始化成功。")
-            print(f"当前连接模式: {self.connection_mode.value}")
+            print("OcaOauth2TokenManager initialized successfully.")
+            print(f"Current connection mode: {self.connection_mode.value}")
 
     def _load_token_from_env(self):
-        """尝试从 .env 文件加载并验证 Access Token。"""
+        """Try to load and validate Access Token from .env file."""
         token = get_key(self.dotenv_path, "OAUTH_ACCESS_TOKEN")
         expires_at_str = get_key(self.dotenv_path, "OAUTH_ACCESS_TOKEN_EXPIRES_AT")
 
@@ -67,7 +67,7 @@ class OCAOauth2TokenManager:
                 self.access_token = token
                 self.expires_at = expires_at
                 if self._debug:
-                    print("从 .env 文件加载了有效的 Access Token。")
+                    print("Loaded a valid Access Token from .env file.")
 
     def _get_proxies(self, mode: ConnectionMode) -> Optional[Dict[str, str]]:
         if mode == ConnectionMode.PROXY:
@@ -75,28 +75,28 @@ class OCAOauth2TokenManager:
                 return {"http": self.proxy_url, "https": self.proxy_url}
             else:
                 if self._debug:
-                    print("警告: 连接模式为 PROXY，但未配置代理 URL。")
+                    print("Warning: Connection mode is PROXY but no proxy URL is configured.")
                 return None
         return {} # direct connection
 
     def request(self, method: str, url: str, _do_retry: bool = True, request_timeout: Optional[float] = None, **kwargs: Any) -> requests.Response:
         """
-        执行一个同步请求。
-        如果 _do_retry 为 True，它会根据当前的 self.connection_mode 尝试连接。如果失败，它会切换模式并立即重试一次。
-        两次连续失败（即，在同一次调用中直连和代理都失败）将引发 ConnectionError。
-        如果 _do_retry 为 False，则只尝试一次，失败则直接抛出 ConnectionError。
+        Perform a synchronous request.
+        If _do_retry is True, it tries using the current self.connection_mode. If it fails, switches mode and retries once.
+        If both direct and proxy fails in the same call, raises ConnectionError.
+        If _do_retry is False, only try once; failure immediately raises ConnectionError.
         """
         primary_mode = self.connection_mode
         secondary_mode = ConnectionMode.PROXY if primary_mode == ConnectionMode.DIRECT else ConnectionMode.DIRECT
 
-        # 尝试第一次
+        # First attempt
         if self._debug:
-            print(f"正在尝试使用 {primary_mode.value} 模式连接 {url}")
+            print(f"Trying to connect to {url} with mode {primary_mode.value}")
         primary_proxies = self._get_proxies(primary_mode)
 
         if primary_mode == ConnectionMode.PROXY and primary_proxies is None:
             if self._debug:
-                print("无法使用代理模式，切换到直连模式。")
+                print("Cannot use proxy mode, switching to direct mode.")
             primary_mode, secondary_mode = secondary_mode, primary_mode
             primary_proxies = self._get_proxies(primary_mode)
 
@@ -104,53 +104,53 @@ class OCAOauth2TokenManager:
             response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=primary_proxies, **kwargs)
             response.raise_for_status()
             if self._debug:
-                print(f"使用 {primary_mode.value} 模式连接 {url} 成功。")
+                print(f"Successfully connected to {url} with mode {primary_mode.value}.")
             return response
         except requests.exceptions.RequestException as e:
             if self._debug:
-                print(f"使用 {primary_mode.value} 模式连接失败: {e}")
+                print(f"Connection with {primary_mode.value} mode failed: {e}")
             if not _do_retry:
-                raise ConnectionError(f"无法连接到 {url}。已禁用重试。") from e
+                raise ConnectionError(f"Unable to connect to {url}. Retry is disabled.") from e
 
             self.connection_mode = secondary_mode
             if self._debug:
-                print(f"连接模式已切换至 {self.connection_mode.value}，下次请求将使用此模式。")
+                print(f"Connection mode switched to {self.connection_mode.value}, will use this for next request.")
 
             secondary_proxies = self._get_proxies(secondary_mode)
             if secondary_mode == ConnectionMode.PROXY and secondary_proxies is None:
-                raise ConnectionError(f"无法连接到 {url}。{primary_mode.value} 模式失败且无代理可供重试。") from e
+                raise ConnectionError(f"Unable to connect to {url}. {primary_mode.value} mode failed and no proxy available for retry.") from e
 
-            # 尝试第二次
+            # Second attempt
             if self._debug:
-                print(f"立即使用 {secondary_mode.value} 模式重试...")
+                print(f"Retrying immediately with {secondary_mode.value} mode...")
             try:
                 response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=secondary_proxies, **kwargs)
                 response.raise_for_status()
                 if self._debug:
-                    print(f"使用 {secondary_mode.value} 模式重试成功。")
+                    print(f"Retry with {secondary_mode.value} mode succeeded.")
                 return response
             except requests.exceptions.RequestException as e2:
                 if self._debug:
-                    print(f"使用 {secondary_mode.value} 模式重试失败: {e2}")
-                raise ConnectionError(f"无法连接到 {url}。{primary_mode.value} 和 {secondary_mode.value} 模式均失败。") from e2
+                    print(f"Retry with {secondary_mode.value} mode failed: {e2}")
+                raise ConnectionError(f"Unable to connect to {url}. Both {primary_mode.value} and {secondary_mode.value} modes failed.") from e2
 
     async def async_stream_request(self, method: str, url: str, _do_retry: bool = True, request_timeout: Optional[float] = None, **kwargs: Any) -> AsyncIterator[str]:
         """
-        执行一个异步流式请求。
-        如果 _do_retry 为 True，逻辑与同步的 request 方法相同：尝试主模式，失败则切换并用备用模式重试。
-        如果 _do_retry 为 False，则只尝试一次，失败则直接抛出 ConnectionError。
+        Perform an asynchronous streaming request.
+        If _do_retry is True, uses the same logic as sync: try primary mode, failover to alternate mode and retry.
+        If _do_retry is False, try once only, on fail raise ConnectionError immediately.
         """
         primary_mode = self.connection_mode
         secondary_mode = ConnectionMode.PROXY if primary_mode == ConnectionMode.DIRECT else ConnectionMode.DIRECT
 
-        # 尝试第一次
+        # First attempt
         if self._debug:
-            print(f"正在尝试使用 {primary_mode.value} 模式的异步流式请求连接 {url}")
+            print(f"Trying async streaming request to {url} with mode {primary_mode.value}")
         primary_proxy_config = self.proxy_url if primary_mode == ConnectionMode.PROXY else None
 
         if primary_mode == ConnectionMode.PROXY and not primary_proxy_config:
             if self._debug:
-                print("无法使用代理模式，切换到直连模式。")
+                print("Cannot use proxy mode, switching to direct mode.")
             primary_mode, secondary_mode = secondary_mode, primary_mode
             primary_proxy_config = None
 
@@ -159,49 +159,49 @@ class OCAOauth2TokenManager:
                 async with client.stream(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, **kwargs) as response:
                     response.raise_for_status()
                     if self._debug:
-                        print(f"使用 {primary_mode.value} 模式的流式连接 {url} 成功。")
+                        print(f"Async streaming connection to {url} with mode {primary_mode.value} succeeded.")
                     async for line in response.aiter_lines():
                         yield line
             return
         except httpx.RequestError as e:
             if self._debug:
-                print(f"使用 {primary_mode.value} 模式的流式连接失败: {e}")
+                print(f"Async streaming connection with {primary_mode.value} mode failed: {e}")
             if not _do_retry:
-                raise ConnectionError(f"无法连接到 {url}。已禁用重试。") from e
+                raise ConnectionError(f"Unable to connect to {url}. Retry is disabled.") from e
 
             self.connection_mode = secondary_mode
             if self._debug:
-                print(f"连接模式已切换至 {self.connection_mode.value}，下次请求将使用此模式。")
+                print(f"Connection mode switched to {self.connection_mode.value}, will use this for next request.")
 
             secondary_proxy_config = self.proxy_url if secondary_mode == ConnectionMode.PROXY else None
             if secondary_mode == ConnectionMode.PROXY and not secondary_proxy_config:
-                raise ConnectionError(f"无法连接到 {url}。{primary_mode.value} 模式失败且无代理可供重试。") from e
+                raise ConnectionError(f"Unable to connect to {url}. {primary_mode.value} mode failed and no proxy available for retry.") from e
 
-            # 尝试第二次
+            # Second attempt
             if self._debug:
-                print(f"立即使用 {secondary_mode.value} 模式重试流式请求...")
+                print(f"Retrying async streaming request immediately with mode {secondary_mode.value}...")
             try:
                 async with httpx.AsyncClient(proxy=secondary_proxy_config) as client:
                     async with client.stream(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, **kwargs) as response:
                         response.raise_for_status()
                         if self._debug:
-                            print(f"使用 {secondary_mode.value} 模式的流式重试成功。")
+                            print(f"Async streaming retry with {secondary_mode.value} mode succeeded.")
                         async for line in response.aiter_lines():
                             yield line
                 return
             except httpx.RequestError as e2:
                 if self._debug:
-                    print(f"使用 {secondary_mode.value} 模式的流式重试失败: {e2}")
-                raise ConnectionError(f"无法连接到 {url}。{primary_mode.value} 和 {secondary_mode.value} 模式的流式请求均失败。") from e2
+                    print(f"Async streaming retry with {secondary_mode.value} mode failed: {e2}")
+                raise ConnectionError(f"Unable to connect to {url}. Both {primary_mode.value} and {secondary_mode.value} async streaming requests failed.") from e2
 
     def _refresh_tokens(self) -> None:
         """
-        使用 Refresh Token 换取新的 Access Token 和 Refresh Token。
-        并将新 Token 持久化到 .env 文件。
+        Use the Refresh Token to acquire new Access and Refresh tokens.
+        Persists new tokens to the .env file.
         """
         current_refresh_token = get_key(self.dotenv_path, "OAUTH_REFRESH_TOKEN")
         if not current_refresh_token:
-            raise ValueError(f"错误：在 {self.dotenv_path} 文件中找不到 OAUTH_REFRESH_TOKEN。")
+            raise ValueError(f"Error: OAUTH_REFRESH_TOKEN not found in {self.dotenv_path} file.")
 
         token_url = f"https://{self.host}/oauth2/v1/token"
         headers = {
@@ -215,7 +215,7 @@ class OCAOauth2TokenManager:
         }
 
         if self._debug:
-            print(f"正在向 {token_url} 发送请求以刷新令牌...")
+            print(f"Sending request to {token_url} to refresh token...")
         try:
             response = self.request(
                 method="POST",
@@ -226,7 +226,7 @@ class OCAOauth2TokenManager:
             )
         except ConnectionError as e:
             if self._debug:
-                print(f"刷新令牌失败: {e}")
+                print(f"Failed to refresh token: {e}")
             raise
 
         response_data = response.json()
@@ -235,35 +235,35 @@ class OCAOauth2TokenManager:
         expires_in = response_data["expires_in"]
         self.expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 60)
         if self._debug:
-            print("Access Token 已在内存中更新。")
+            print("Access Token has been updated in memory.")
 
         set_key(self.dotenv_path, "OAUTH_ACCESS_TOKEN", self.access_token)
         set_key(self.dotenv_path, "OAUTH_ACCESS_TOKEN_EXPIRES_AT", self.expires_at.isoformat())
         if self._debug:
-            print(f"Access Token 和过期时间已写入 {self.dotenv_path}。")
+            print(f"Access Token and expiry have been written to {self.dotenv_path}.")
 
         if "refresh_token" in response_data:
             new_refresh_token = response_data["refresh_token"]
             if set_key(self.dotenv_path, "OAUTH_REFRESH_TOKEN", new_refresh_token):
                 if self._debug:
-                    print(f"Refresh Token 已在 {self.dotenv_path} 文件中更新。")
+                    print(f"Refresh Token has been updated in {self.dotenv_path}.")
             else:
                 if self._debug:
-                    print(f"警告: 更新 {self.dotenv_path} 文件失败！")
+                    print(f"Warning: Failed to update {self.dotenv_path} with new Refresh Token!")
 
     def get_access_token(self) -> str:
         """
-        获取一个有效的 Access Token。如果当前令牌无效或已过期，则自动刷新。
+        Obtain a valid Access Token. If the current token is invalid or expired, automatically refresh.
         """
         if self.access_token and self.expires_at and datetime.now(timezone.utc) < self.expires_at:
             if self._debug:
-                print("使用内存中缓存的有效 Access Token。")
+                print("Using valid Access Token from memory cache.")
             return self.access_token
 
         if self._debug:
-            print("Access Token 已过期或不存在，正在启动刷新流程...")
+            print("Access Token expired or not found, starting refresh process...")
         self._refresh_tokens()
         if self.access_token:
             return self.access_token
         else:
-            raise ValueError("刷新后未能获取有效的 Access Token。")
+            raise ValueError("Failed to obtain valid Access Token after refresh.")

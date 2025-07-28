@@ -21,3 +21,8 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ui", "core"]
+
+[tool.uv.workspace]
+members = [
+    "oca_langchain",
+]

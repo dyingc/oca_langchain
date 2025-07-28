@@ -12,7 +12,7 @@ def render_copy_button(text_to_copy: str, component_key: str):
     """
     encoded_text = base64.b64encode(text_to_copy.encode("utf-8")).decode("utf-8")
     component_html = f"""
-    <div style="display: flex; justify-content: flex-end; margin-top: -50px; margin-right: 5px;">
+    <div style="display: flex; justify-content: flex-end; margin-top: -45px; margin-right: 5px;">
         <style>
             .copy-btn-whole {{
                 border: none;
@@ -27,19 +27,19 @@ def render_copy_button(text_to_copy: str, component_key: str):
             .copy-btn-whole:hover {{ background: #4a4a4a; color: white; }}
         </style>
         <button class="copy-btn-whole" onclick="copyToClipboard(this, '{encoded_text}')">
-            复制全文
+            <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxwYXRoIGZpbGw9ImN1cnJlbnRDb2xvciIgZD0iTTUgMjFWNWgzdjE0SDVabTQtNEgxN1YzaC04djE0Wm0tNCA1VjBoMTB2M2gtN3YxNmgyVjZoN3YxNkgzWiIvPjwvc3ZnPg==" alt="Copy">
         </button>
         <script>
             if (!window.copyToClipboard) {{
                 window.copyToClipboard = function(element, b64text) {{
                     const decodedText = atob(b64text);
                     navigator.clipboard.writeText(decodedText).then(function() {{
-                        const originalText = element.innerText;
-                        element.innerText = '已复制!';
-                        setTimeout(() => {{ element.innerText = originalText; }}, 2000);
+                        const originalText = element.innerHTML;
+                        element.innerText = 'Copied!';
+                        setTimeout(() => {{ element.innerHTML = originalText; }}, 2000);
                     }}, function(err) {{
                         console.error('Could not copy text: ', err);
-                        alert("复制失败，请手动复制。");
+                        alert("Copy failed. Please copy manually.");
                     }});
                 }}
             }}
@@ -69,8 +69,8 @@ def add_copy_to_code_blocks(markdown_text: str, key_prefix: str) -> str:
             highlighted_code = f'<pre><code{lang_class}>{highlighted_code}</code></pre>'
 
         encoded_content = base64.b64encode(token.content.encode("utf-8")).decode("utf-8")
-        button_html = f'<button class="copy-btn-code" onclick="copyToClipboard(this, \'{encoded_content}\')">复制</button>'
-        
+        button_html = f'<button class="copy-btn-code" onclick="copyToClipboard(this, \'{encoded_content}\')"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxwYXRoIGZpbGw9ImN1cnJlbnRDb2xvciIgZD0iTTUgMjFWNWgzdjE0SDVWmTQtNEgxN1YzaC04djE0Wm0tNCA1VjBoMTB2M2gtN3YxNmgyVjZoN3YxNkgzWiIvPjwvc3ZnPg==" alt="Copy"></button>'
+
         return f'<div class="code-container">{button_html}{highlighted_code}</div>'
 
     md.add_render_rule("fence", custom_fence_renderer)
@@ -82,7 +82,7 @@ def add_copy_to_code_blocks(markdown_text: str, key_prefix: str) -> str:
         .copy-btn-code {
             position: absolute; top: 0.5em; right: 0.5em; z-index: 1;
             border: none; background: #373737; color: #ccc; cursor: pointer;
-            padding: 4px 6px; border-radius: 4px; font-size: 12px;
+            padding: 6px 8px; border-radius: 4px; font-size: 12px;
             opacity: 0.5; transition: opacity 0.2s, background 0.2s, color 0.2s;
         }
         .code-container:hover .copy-btn-code { opacity: 1; }
@@ -93,9 +93,9 @@ def add_copy_to_code_blocks(markdown_text: str, key_prefix: str) -> str:
             window.copyToClipboard = function(element, b64text) {
                 const decodedText = atob(b64text);
                 navigator.clipboard.writeText(decodedText).then(function() {
-                    const originalText = element.innerText;
-                    element.innerText = '已复制!';
-                    setTimeout(() => { element.innerText = originalText; }, 2000);
+                    const originalText = element.innerHTML;
+                element.innerText = 'Copied!';
+                setTimeout(() => { element.innerHTML = originalText; }, 2000);
                 }, function(err) {
                     console.error('Could not copy text: ', err);
                 });
