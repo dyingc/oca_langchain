@@ -1,193 +1,192 @@
-# LangChain 自定义 LLM 与 OAuth2 认证
+# LangChain Custom LLM & OAuth2 Authentication
 
-本项目实现了一个功能完备的自定义 LangChain `LLM` 类，并新增了 OpenAI 兼容的 FastAPI 服务，方便将本地/内网模型直接当作 “自托管 OpenAI” 使用。
+This project provides a fully functional custom LangChain `LLM` class and an OpenAI-compatible FastAPI service, enabling you to use local/intranet models as a "self-hosted OpenAI" replacement.
 
-它解决了在 LangChain 生态中集成需要动态令牌管理的私有或受保护 LLM 服务、以及对接多端 OpenAI SDK 的核心问题。
+It solves the core problems of integrating private or protected LLM services requiring dynamic token management in the LangChain ecosystem and connecting with multi-end OpenAI SDKs.
 
-## ✨ 主要特性
+## ✨ Main Features
 
-- **完整的 OAuth2 刷新令牌流程**：自动使用 `Refresh Token` 来获取临时 `Access Token`，并支持令牌轮换（Token Rotation），将新的 `Refresh Token` 持久化到 `.env`。
-- **OpenAI 兼容 FastAPI 服务**：提供 `/v1/models` 与 `/v1/chat/completions` 端点，可直接替代 OpenAI，支持流式 & 非流式。
-- **令牌持久化与缓存**：成功获取的 `Access Token` 会被写入 `.env`，重启后如未过期即可直接复用。
-- **无缝 LangChain 集成**：遵循 `BaseChatModel`，正常调用 `invoke / stream / astream`。
-- **支持流式响应 (Streaming)**：完整 SSE 解析，实时获取模型输出。
-- **配置驱动**：所有敏感信息、模型参数均写入 `.env`。
-- **异步支持**：同步 `requests` + 异步 `httpx` 双实现。
-- **智能网络重试与超时**：按场景区分重试策略与超时，兼顾稳定与性能。
+- **Complete OAuth2 Refresh Token Workflow**: Automatically uses a `Refresh Token` to obtain a temporary `Access Token`, supports token rotation, and persists the latest `Refresh Token` to `.env`.
+- **OpenAI-Compatible FastAPI Service**: Offers `/v1/models` and `/v1/chat/completions` endpoints, allows direct OpenAI API replacement, supporting both streaming & non-streaming.
+- **Token Persistence and Caching**: Successfully retrieved `Access Tokens` are written to `.env` and can be reused if not expired after a restart.
+- **Seamless LangChain Integration**: Follows `BaseChatModel`, can be called normally via `invoke / stream / astream`.
+- **Supports Streaming Responses**: Complete SSE parsing and real-time model output.
+- **Config Driven**: All sensitive info and model parameters are in `.env`.
+- **Async Support**: Both synchronous `requests` and asynchronous `httpx` backend implementations.
+- **Intelligent Network Retry & Timeout**: Scenario-adaptive strategy ensures stability and performance, with separate policies for quick operations and long-running inference.
 
-## 📂 文件结构
+## 📂 Project Structure
 ```
 .
-├── app.py                    # Streamlit 聊天机器人 UI
-├── api.py                    # OpenAI 兼容 FastAPI 服务
-├── core/llm.py                # 核心：OCAChatModel
-├── core/oauth2_token_manager.py   # OAuth2 令牌管理
-├── run_api.sh                # 一键启动 API 服务
-├── run_ui.sh                 # 一键启动 Streamlit UI
-├── .env                      # 环境配置 (自行创建)
-├── README.md                 # 本文件
-├── pyproject.toml            # 依赖定义 (uv)
-└── uv.lock                   # 锁定依赖版本
+├── app.py                    # Streamlit chatbot UI
+├── api.py                    # OpenAI-compatible FastAPI service
+├── core/llm.py               # Core: OCAChatModel
+├── core/oauth2_token_manager.py   # OAuth2 token management
+├── run_api.sh                # One-click API service launcher
+├── run_ui.sh                 # One-click Streamlit UI launcher
+├── .env                      # Environment config (create manually)
+├── README.md                 # This file
+├── pyproject.toml            # Dependency definitions (uv)
+└── uv.lock                   # Locked dependencies
 ```
-## 🚀 安装与配置
+## 🚀 Installation & Configuration
 
-**1. 环境准备**
+**1. Prepare Environment**
 
-本项目使用 `uv` 进行包管理。建议在虚拟环境中操作。
+This project uses `uv` for package management. It's recommended to work within a virtual environment.
 
 ```bash
-# 创建虚拟环境
+# Create a virtual environment
 python -m venv .venv
 
-# 激活虚拟环境 (Linux/macOS)
+# Activate the virtual environment (Linux/macOS)
 source .venv/bin/activate
 
-# 如果您没有 uv，请先安装
+# If you don't have uv, install it
 pip install uv
 ```
 
-**2. 同步依赖**
+**2. Sync Dependencies**
 
-使用 `uv.lock` 文件来精确同步所有依赖，确保环境一致性。
+Synchronize all dependencies precisely with the `uv.lock` file for consistent environments.
 
 ```bash
 uv sync
 ```
 
-**3. 创建并配置 `.env` 文件**
+**3. Create and Configure `.env`**
 
-根据以下模板创建 `.env` 文件，并填入您的真实凭证和配置：
+Create a `.env` file based on the following template and fill in your real credentials:
 
 ```dotenv
-# --- OAuth2 认证配置 ---
+# --- OAuth2 Authentication ---
 OAUTH_HOST="your-oauth-host.com"
 OAUTH_CLIENT_ID="your_client_id"
 OAUTH_REFRESH_TOKEN="your_initial_refresh_token"
 
-# --- LLM API 配置 ---
-# 语言模型 API 的完整端点 URL
+# --- LLM API Configuration ---
+# Full endpoint URL for your language model API
 LLM_API_URL="https://your-llm-api-endpoint/v1/chat/completions"
 
-# 要使用的模型名称
+# Model name to use
 LLM_MODEL_NAME="your-model-name"
 
-# 获取可用模型列表的 API 端点
+# API endpoint for available models
 LLM_MODELS_API_URL=""
 
-# 默认的系统提示 (System Prompt)
+# Default system prompt
 LLM_SYSTEM_PROMPT="You are a helpful assistant."
 
-# 默认的采样温度 (0.0 到 2.0 之间)
+# Default sampling temperature (between 0.0 and 2.0)
 LLM_TEMPERATURE="0.7"
 
-# LLM 请求的超时时间 (单位: 秒，支持浮点数，建议 60 秒及以上。可选)
+# LLM request timeout (in seconds, supports float, e.g. 60s+ recommended)
 LLM_REQUEST_TIMEOUT="120"
 
-# --- 网络配置 ---
-# 如果应用无法直接访问 OAuth 或 LLM API，请在此处指定 HTTP 代理服务器的地址
-# 例如: http://user:password@proxy.example.com:8080
+# --- Network Settings ---
+# If the app cannot access OAuth or LLM API directly, specify a HTTP proxy
+# Example: http://user:password@proxy.example.com:8080
 HTTP_PROXY_URL=""
 
-# 网络连接超时时间 (单位: 秒，支持浮点数，建议 2 秒及以上。此超时主要用于快速的 API 请求，如获取模型列表和刷新令牌。)
+# Connection timeout (seconds, supports float, recommended at least 2s; used for quick API requests like token/model fetch.)
 CONNECTION_TIMEOUT="2"
 
-# --- 以下字段由程序自动管理 ---
+# --- Fields below are auto-managed by the program ---
 OAUTH_ACCESS_TOKEN=
 OAUTH_ACCESS_TOKEN_EXPIRES_AT=
 ```
 
-## 🛠️ 如何运行
+## 🛠️ How to Run
 
-### 命令行测试
+### Command Line Test
 
-配置好 `.env` 文件后，直接运行 `core/llm.py` 即可启动原始的命令行测试程序：
+After configuring `.env`, run the original CLI test tool in `core/llm.py`:
 
 ```bash
 python core/llm.py
 ```
 
-脚本会依次演示三种调用方式：
-1.  同步流式调用 (`llm.stream`)
-2.  同步非流式调用 (`llm.invoke`)
-3.  异步流式调用 (`llm.astream`)
+The script will sequentially demonstrate three usage patterns:
+1.  Synchronous streaming (`llm.stream`)
+2.  Synchronous non-streaming (`llm.invoke`)
+3.  Asynchronous streaming (`llm.astream`)
 
+### Launch the Interactive Chatbot UI
 
-### 启动交互式聊天机器人 UI
+A Streamlit web UI is provided.
 
-我们提供了一个基于 Streamlit 的交互式 Web UI。
-
-**1. 安装 Streamlit**
+**1. Install Streamlit**
 
 ```bash
 pip install streamlit
 ```
 
-**2. 启动应用**
+**2. Start the App**
 
 ```bash
 streamlit run app.py
 ```
 
-这会启动一个本地 Web 服务器，并在您的浏览器中打开一个新的标签页，显示聊天机器人界面。您可以在侧边栏调整系统提示、温度和选择不同的模型。
+This will launch a local web server and open the chatbot UI in your browser. You can tune the system prompt, temperature, or pick a model in the sidebar.
 
-## 🤖 代码概览
+## 🤖 Code Overview
 
 ### `core/oauth2_token_manager.py`
 
-- **`OCAOauth2TokenManager` 类**:
-  - 这是项目的认证核心。它独立于 LangChain，专门负责管理令牌的整个生命周期。
-  - 在初始化时，它会尝试从 `.env` 文件加载一个未过期的 `Access Token`。
-  - `get_access_token()` 是其主要公共方法。当被调用时，它会检查内存中的令牌是否有效。如果无效或过期，则会自动触发 `_refresh_tokens()` 方法。
-  - `_refresh_tokens()` 方法负责执行与 OAuth2 服务器的通信，用 `Refresh Token` 换取新的 `Access Token`，并处理返回的新 `Refresh Token`，最后将这些信息持久化到 `.env` 文件。
-  - **网络连接管理**: 引入了智能网络重试机制，仅在获取模型列表和刷新令牌等快速操作时尝试切换直连/代理模式。LLM 推理请求则使用独立的、更长的超时时间，且不进行网络模式切换重试。
+- **`OCAOauth2TokenManager` Class**:
+  - Handles authentication. Completely independent of LangChain, focused on token lifecycle management.
+  - On init, tries to load a non-expired `Access Token` from `.env`.
+  - `get_access_token()` is the main public method. It checks if the in-memory token is valid, and refreshes if not.
+  - `_refresh_tokens()` does OAuth2 communication, swapping `Refresh Token` for a new `Access Token`, handling any new `Refresh Token` in responses, and persists to `.env`.
+  - **Network Management**: Includes smart retry logic, switching between direct/proxy for quick operations like model list or refresh; LLM inference uses longer timeout and no retries for output stability.
 
 ### `core/llm.py`
 
-- **`OCAChatModel` 类**:
-  - 继承自 LangChain 的 `BaseChatModel` 基类。
-  - 它不直接处理认证逻辑，而是在初始化时接收一个 `OCAOauth2TokenManager` 实例。
-  - 在执行 API 调用（如 `_stream`, `_astream`）前，它会通过调用 `token_manager.get_access_token()` 来获取一个有效的令牌。
-  - 它实现了 LangChain 的标准方法，如 `_stream` 用于处理流式响应，`_generate` 用于处理非流式响应，以及对应的异步版本。
-  - `@classmethod from_env` 提供了一种便捷的方式来从环境变量实例化该类。
-  - **模型列表动态获取**: 在初始化时会尝试从配置的 `LLM_MODELS_API_URL` 获取可用模型列表，并支持在 UI 中手动刷新。
-  - **独立 LLM 请求超时**: LLM 推理请求现在使用 `LLM_REQUEST_TIMEOUT` 配置的超时时间，以适应长时间的生成任务。
+- **`OCAChatModel` Class**:
+  - Extends LangChain's `BaseChatModel`.
+  - Does not handle auth internally; gets an `OCAOauth2TokenManager` instance during init.
+  - Before any API call (`_stream`, `_astream`), gets a valid token via `token_manager.get_access_token()`.
+  - Implements LangChain standard methods like `_stream` (streaming), `_generate` (non-streaming), and async counterparts.
+  - `@classmethod from_env` provides a convenient method to instantiate from env vars.
+  - **Dynamic Model List Fetching**: At init, tries to fetch available models via `LLM_MODELS_API_URL`, and supports manual refresh in UI.
+  - **Independent Inference Timeout**: LLM inference uses `LLM_REQUEST_TIMEOUT` for long outputs.
 
-### 启动 OpenAI 兼容 API 服务
+### Start the OpenAI-Compatible API Server
 
 ```bash
-# 方式 1：uvicorn 直接启动
+# Option 1: Start with uvicorn directly
 uvicorn api:app --host 0.0.0.0 --port 8000
 
-# 方式 2：一键脚本
+# Option 2: Use the one-click script
 bash run_api.sh
 ```
-服务默认监听 **8000** 端口。
+The service listens on port **8000** by default.
 
-**主要端点**
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET  | /v1/models            | 获取可用模型列表 |
-| POST | /v1/chat/completions  | 聊天补全（支持 `stream=true`） |
+**Main Endpoints**
+| Method | Path | Description        |
+|--------|------|-------------------|
+| GET    | /v1/models           | Get available model list |
+| POST   | /v1/chat/completions | Chat completion (supports `stream=true`) |
 
-**快速调用示例**
+**Quick Usage Example**
 
-非流式：
+Non-streaming:
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
         "model":"your-model-name",
-        "messages":[{"role":"user","content":"你好！"}]
+        "messages":[{"role":"user","content":"Hello!"}]
       }'
 ```
-流式 SSE：
+Streaming SSE:
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
         "model":"your-model-name",
-        "messages":[{"role":"user","content":"讲个笑话"}],
+        "messages":[{"role":"user","content":"Tell me a joke"}],
         "stream":true
       }'
 ```
-Python：
+Python:

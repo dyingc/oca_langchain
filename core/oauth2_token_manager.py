@@ -42,7 +42,7 @@ class OCAOauth2TokenManager:
         self.expires_at: Optional[datetime] = None
 
         # Network timeout: try to get from env, otherwise defaults to 2 seconds
-        self.timeout: float = 20.0
+        self.timeout: float = 2.0
         try:
             timeout_str = get_key(self.dotenv_path, "CONNECTION_TIMEOUT")
             if timeout_str:

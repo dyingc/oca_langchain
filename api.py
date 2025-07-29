@@ -65,14 +65,14 @@ class ChatCompletionStreamResponse(BaseModel):
     choices: List[ChatCompletionStreamChoice]
 
 # --- Global Objects ---
-# 使用一个字典来存储生命周期中的对象
+# Use a dictionary to store objects during the application lifecycle
 lifespan_objects = {}
 
 # --- FastAPI Lifespan Management ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    在应用启动时初始化核心组件，在关闭时清理。
+    Initialize core components at application startup and clean up on shutdown.
     """
     print("--- Initializing core components ---")
     try:
@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
         print("--- Core components initialized successfully ---")
     except (FileNotFoundError, ValueError) as e:
         print(f"FATAL: Failed to initialize core components: {e}")
-        # 在这种情况下，应用将无法正常工作
+        # In this case, the application will not work properly.
         lifespan_objects["chat_model"] = None
 
     yield
@@ -96,7 +96,7 @@ app = FastAPI(lifespan=lifespan)
 # --- Helper Functions ---
 def get_chat_model() -> OCAChatModel:
     """
-    获取已初始化的 chat_model 实例，如果失败则抛出异常。
+    Get the initialized chat_model instance. Raises exception if unavailable.
     """
     model = lifespan_objects.get("chat_model")
     if model is None:
@@ -108,8 +108,8 @@ def get_chat_model() -> OCAChatModel:
 
 def convert_to_langchain_messages(messages: List[ChatMessage]) -> List[BaseMessage]:
     """
-    将 Pydantic 模型转换为 LangChain 的 Message 对象。
-    能够处理 content 是字符串或字典列表的情况。
+    Convert Pydantic models to LangChain Message objects.
+    Handles cases where content is a string or a list of dictionaries.
     """
     lc_messages = []
     for msg in messages:
@@ -117,7 +117,7 @@ def convert_to_langchain_messages(messages: List[ChatMessage]) -> List[BaseMessa
         if isinstance(msg.content, str):
             content_str = msg.content
         elif isinstance(msg.content, list):
-            # 将内容块列表合并为一个字符串
+            # Merge list of content chunks into a single string
             processed_parts = []
             for part in msg.content:
                 if isinstance(part, dict) and "text" in part:
@@ -134,41 +134,65 @@ def convert_to_langchain_messages(messages: List[ChatMessage]) -> List[BaseMessa
     return lc_messages
 
 # --- API Endpoints ---
-
 @app.get("/v1/models", response_model=ModelList)
 async def list_models():
     """
-    提供兼容 OpenAI 的模型列表端点。
+    Provides an OpenAI-compatible endpoint for listing available models.
     """
     chat_model = get_chat_model()
     model_cards = [ModelCard(id=model_id) for model_id in chat_model.available_models]
     return ModelList(data=model_cards)
 
+@app.post("/v1/spend/calculate")
+async def spend_calculate(request: Request):
+    """
+    Dummy endpoint for compatibility with OpenAI API.
+    This endpoint does not perform any actual calculations.
+    It simply returns a placeholder response.
+    """
+    # Parse the request body
+    body = await request.json()
+
+    return {
+        "id": "spend-calc-12345",
+        "object": "spend.calculation",
+        "model": body.get("model", "unknown"),
+        "usage": {
+            "prompt_tokens": body.get("prompt_tokens", 0),
+            "completion_tokens": body.get("completion_tokens", 0),
+            "total_tokens": body.get("total_tokens", 0)
+        },
+        "result": {
+            "cost": 0.0,
+            "currency": "USD"
+        }
+    }
+
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest):
     """
-    提供兼容 OpenAI 的聊天补全端点，支持流式和非流式响应。
+    Provides an OpenAI-compatible chat completion endpoint, supporting both streaming and non-streaming responses.
     """
     chat_model = get_chat_model()
 
-    # 检查请求的模型是否可用
+    # Check if the requested model is available
     if request.model not in chat_model.available_models:
         raise HTTPException(
             status_code=404,
             detail=f"Model '{request.model}' not found. Available models: {', '.join(chat_model.available_models)}"
         )
 
-    # 更新模型实例以使用请求的参数
+    # Update the model instance with parameters from the request
     chat_model.model = request.model
     chat_model.temperature = request.temperature
 
     lc_messages = convert_to_langchain_messages(request.messages)
 
-    # --- 流式响应 ---
+    # --- Streaming response ---
     if request.stream:
         async def stream_generator():
             try:
-                # 使用 astream 进行异步流式处理
+                # Use astream for asynchronous streaming
                 async for chunk in chat_model.astream(lc_messages, max_tokens=request.max_tokens):
                     if chunk.content:
                         stream_response = ChatCompletionStreamResponse(
@@ -180,7 +204,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
                         )
                         yield f"data: {stream_response.json()}\n\n"
 
-                # 发送最后的 [DONE] 信号
+                # Send final [DONE] signal
                 final_chunk = ChatCompletionStreamResponse(
                     model=request.model,
                     choices=[ChatCompletionStreamChoice(
@@ -194,7 +218,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
             except Exception as e:
                 print(f"Error during streaming: {e}")
-                # 可以在这里发送一个错误信息的 chunk
+                # Optionally send an error info chunk
                 error_response = {
                     "error": {"message": "An error occurred during streaming.", "type": "server_error"}
                 }
@@ -202,10 +226,10 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
         return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
-    # --- 非流式响应 ---
+    # --- Non-streaming response ---
     else:
         try:
-            # 使用 invoke 进行同步调用（在异步函数中通过 asyncio.to_thread 运行）
+            # Use invoke for synchronous call (run within asyncio.to_thread)
             response = await asyncio.to_thread(
                 chat_model.invoke,
                 lc_messages,
@@ -225,7 +249,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    # 为了直接运行进行测试，可以使用 uvicorn
-    # 命令行: uvicorn app:app --reload --port 8000
+    # For direct execution and testing, use uvicorn:
+    # Command line: uvicorn app:app --reload --port 8000
     print("To run this application, use the command:")
     print("uvicorn api:app --host 0.0.0.0 --port 8000")
