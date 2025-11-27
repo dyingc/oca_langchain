@@ -143,6 +143,15 @@ async def list_models():
     model_cards = [ModelCard(id=model_id) for model_id in chat_model.available_models]
     return ModelList(data=model_cards)
 
+@app.get("/v1/model/info", response_model=ModelList)
+async def list_models():
+    """
+    Provides an OpenAI-compatible endpoint for listing available models.
+    """
+    chat_model = get_chat_model()
+    model_cards = [ModelCard(id=model_id) for model_id in chat_model.available_models]
+    return ModelList(data=model_cards)
+
 @app.post("/v1/spend/calculate")
 async def spend_calculate(request: Request):
     """
