@@ -143,14 +143,64 @@ async def list_models():
     model_cards = [ModelCard(id=model_id) for model_id in chat_model.available_models]
     return ModelList(data=model_cards)
 
-@app.get("/v1/model/info", response_model=ModelList)
+class LiteLLMParams(BaseModel):
+    model: str
+    # Add other litellm_params fields as needed
+
+class ModelInfo(BaseModel):
+    id: str
+    db_model: bool = False
+    key: Optional[str] = None
+    max_tokens: Optional[int] = None
+    max_input_tokens: Optional[int] = None
+    max_output_tokens: Optional[int] = None
+    input_cost_per_token: Optional[float] = None
+    input_cost_per_character: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    output_cost_per_character: Optional[float] = None
+    litellm_provider: Optional[str] = None
+    mode: Optional[str] = None
+    # Add any custom fields you want to include
+
+class ModelData(BaseModel):
+    model_name: str
+    litellm_params: LiteLLMParams
+    model_info: ModelInfo
+
+class ModelInfoList(BaseModel):
+    data: List[ModelData]
+
+@app.get("/v1/model/info", response_model=ModelInfoList)
 async def list_models():
     """
-    Provides an OpenAI-compatible endpoint for listing available models.
+    Provides a LiteLLM-compatible endpoint for listing available models with detailed info.
     """
     chat_model = get_chat_model()
-    model_cards = [ModelCard(id=model_id) for model_id in chat_model.available_models]
-    return ModelList(data=model_cards)
+
+    model_data_list = []
+    for model_id in chat_model.available_models:
+        model_data = ModelData(
+            model_name=model_id,
+            litellm_params=LiteLLMParams(
+                model=model_id
+            ),
+            model_info=ModelInfo(
+                id=model_id,
+                db_model=False,
+                key=model_id,
+                mode="chat",  # or "completion" depending on your models
+                litellm_provider="oca",  # your provider name
+                # Add token limits and pricing if available:
+                # max_tokens=4096,
+                # max_input_tokens=8192,
+                # max_output_tokens=4096,
+                # input_cost_per_token=0.00003,
+                # output_cost_per_token=0.00006,
+            )
+        )
+        model_data_list.append(model_data)
+
+    return ModelInfoList(data=model_data_list)
 
 @app.post("/v1/spend/calculate")
 async def spend_calculate(request: Request):
