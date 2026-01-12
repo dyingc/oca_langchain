@@ -141,10 +141,20 @@ class OCAChatModel(BaseChatModel):
 
     def _build_payload(self, messages: List[BaseMessage], stream: bool, **kwargs: Any) -> dict:
         payload = {
-            "model": self.model, "messages": [_convert_message_to_dict(m) for m in messages],
-            "temperature": self.temperature, "stream": stream, **kwargs
+            "model": self.model,
+            "messages": [_convert_message_to_dict(m) for m in messages],
+            "temperature": self.temperature,
+            "stream": stream,
         }
-        if stream: payload["stream_options"] = {"include_usage": False}
+        # Optional args passthrough
+        if "max_tokens" in kwargs and kwargs["max_tokens"] is not None:
+            payload["max_tokens"] = kwargs["max_tokens"]
+        if "tool_choice" in kwargs and kwargs["tool_choice"] is not None:
+            payload["tool_choice"] = kwargs["tool_choice"]
+        if "tools" in kwargs and kwargs["tools"]:
+            payload["tools"] = kwargs["tools"]
+        if stream:
+            payload["stream_options"] = {"include_usage": False}
         return payload
 
     def _stream(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
@@ -167,8 +177,30 @@ class OCAChatModel(BaseChatModel):
                 if not line_data: continue
                 try:
                     chunk_data = json.loads(line_data)
-                    delta = chunk_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    if delta: yield ChatGenerationChunk(message=AIMessageChunk(content=delta))
+                    delta_obj = chunk_data.get("choices", [{}])[0].get("delta", {})
+                    content_delta = delta_obj.get("content", "")
+                    tool_calls_delta = delta_obj.get("tool_calls")
+                    # Normalize legacy function_call delta into tool_calls format
+                    function_call_delta = delta_obj.get("function_call")
+                    if function_call_delta is not None:
+                        fc_tool = {
+                            "index": 0,
+                            "id": function_call_delta.get("id"),
+                            "type": "function",
+                            "function": {
+                                "name": function_call_delta.get("name"),
+                                "arguments": function_call_delta.get("arguments"),
+                            },
+                        }
+                        if tool_calls_delta is None:
+                            tool_calls_delta = [fc_tool]
+                        else:
+                            tool_calls_delta = list(tool_calls_delta) + [fc_tool]
+                    additional_kwargs = {}
+                    if tool_calls_delta is not None:
+                        additional_kwargs["tool_calls"] = tool_calls_delta
+                    if content_delta or additional_kwargs:
+                        yield ChatGenerationChunk(message=AIMessageChunk(content=content_delta or "", additional_kwargs=additional_kwargs))
                 except json.JSONDecodeError: continue
 
     async def _astream(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, run_manager: Optional[AsyncCallbackManagerForLLMRun] = None, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
@@ -185,17 +217,93 @@ class OCAChatModel(BaseChatModel):
                     if not line_data: continue
                     try:
                         chunk_data = json.loads(line_data)
-                        delta = chunk_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                        if delta: yield ChatGenerationChunk(message=AIMessageChunk(content=delta))
+                        delta_obj = chunk_data.get("choices", [{}])[0].get("delta", {})
+                        content_delta = delta_obj.get("content", "")
+                        tool_calls_delta = delta_obj.get("tool_calls")
+                        # Normalize legacy function_call delta into tool_calls format
+                        function_call_delta = delta_obj.get("function_call")
+                        if function_call_delta is not None:
+                            fc_tool = {
+                                "index": 0,
+                                "id": function_call_delta.get("id"),
+                                "type": "function",
+                                "function": {
+                                    "name": function_call_delta.get("name"),
+                                    "arguments": function_call_delta.get("arguments"),
+                                },
+                            }
+                            if tool_calls_delta is None:
+                                tool_calls_delta = [fc_tool]
+                            else:
+                                tool_calls_delta = list(tool_calls_delta) + [fc_tool]
+                        additional_kwargs = {}
+                        if tool_calls_delta is not None:
+                            additional_kwargs["tool_calls"] = tool_calls_delta
+                        if content_delta or additional_kwargs:
+                            yield ChatGenerationChunk(message=AIMessageChunk(content=content_delta or "", additional_kwargs=additional_kwargs))
                     except json.JSONDecodeError: continue
         except ConnectionError as e:
             print(f"Async streaming API request failed: {e}. Retry is disabled.")
             raise
 
     def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> ChatResult:
+        # Aggregate content and reconstruct streaming tool_calls deltas into a final OpenAI-compatible list
         full_response_content = ""
+        tool_builders: dict = {}
+        order: List[Any] = []
         for chunk in self._stream(messages, stop, run_manager, **kwargs):
-            full_response_content += chunk.message.content
+            # Accumulate text content
+            if getattr(chunk.message, "content", None):
+                full_response_content += chunk.message.content
+            # Accumulate tool_calls deltas
+            try:
+                additional = getattr(chunk.message, "additional_kwargs", {}) or {}
+                tcs = additional.get("tool_calls")
+                if isinstance(tcs, list):
+                    for tc in tcs:
+                        # OpenAI streaming provides an index; fall back to id or 0
+                        idx = tc.get("index")
+                        tid = tc.get("id")
+                        if idx is not None:
+                            key = ("i", idx)
+                        elif tid is not None:
+                            key = ("id", tid)
+                        else:
+                            key = ("i", 0)
+                        if key not in tool_builders:
+                            tool_builders[key] = {"type": "function", "id": tid, "function": {"name": None, "arguments": ""}}
+                            order.append(key)
+                        b = tool_builders[key]
+                        # Merge fields
+                        if "type" in tc and tc["type"]:
+                            b["type"] = tc["type"]
+                        if tid and not b.get("id"):
+                            b["id"] = tid
+                        fdelta = tc.get("function") or {}
+                        if "name" in fdelta and fdelta["name"]:
+                            b["function"]["name"] = fdelta["name"]
+                        if "arguments" in fdelta and fdelta["arguments"]:
+                            # Append incremental argument chunks
+                            b["function"]["arguments"] += fdelta["arguments"]
+            except Exception:
+                pass
+        # Build final tool_calls list if any
+        final_tool_calls = None
+        if order:
+            final_tool_calls = []
+            for key in order:
+                b = tool_builders[key]
+                # Ensure required structure
+                if "function" not in b or b["function"] is None:
+                    b["function"] = {"name": None, "arguments": ""}
+                if "arguments" not in b["function"] or b["function"]["arguments"] is None:
+                    b["function"]["arguments"] = ""
+                # Coerce to str to satisfy OpenAI schema
+                if not isinstance(b["function"]["arguments"], str):
+                    b["function"]["arguments"] = str(b["function"]["arguments"])
+                final_tool_calls.append(b)
+        if final_tool_calls is not None:
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=full_response_content, additional_kwargs={"tool_calls": final_tool_calls}))])
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=full_response_content))])
 
     @property

@@ -25,7 +25,8 @@ class ModelList(BaseModel):
 
 class ChatMessage(BaseModel):
     role: str
-    content: Union[str, List[Dict[str, str]]]
+    content: Optional[Union[str, List[Dict[str, str]]]] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
 
 class ChatCompletionRequest(BaseModel):
     model: str
@@ -34,6 +35,8 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     max_tokens: Optional[int] = None
     stream_options: Optional[Dict] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+    tools: Optional[List[Dict[str, Any]]] = None
 
 class ChatCompletionChoice(BaseModel):
     index: int
@@ -51,6 +54,7 @@ class ChatCompletionResponse(BaseModel):
 class DeltaMessage(BaseModel):
     role: Optional[str] = None
     content: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
 
 class ChatCompletionStreamChoice(BaseModel):
     index: int
@@ -114,7 +118,9 @@ def convert_to_langchain_messages(messages: List[ChatMessage]) -> List[BaseMessa
     lc_messages = []
     for msg in messages:
         content_str = ""
-        if isinstance(msg.content, str):
+        if msg.content is None:
+            content_str = ""
+        elif isinstance(msg.content, str):
             content_str = msg.content
         elif isinstance(msg.content, list):
             # Merge list of content chunks into a single string
@@ -252,13 +258,21 @@ async def create_chat_completion(request: ChatCompletionRequest):
         async def stream_generator():
             try:
                 # Use astream for asynchronous streaming
-                async for chunk in chat_model.astream(lc_messages, max_tokens=request.max_tokens):
-                    if chunk.content:
+                async for chunk in chat_model.astream(lc_messages, max_tokens=request.max_tokens, tool_choice=request.tool_choice, tools=request.tools):
+                    # Support both content tokens and tool_calls deltas
+                    content_delta = getattr(chunk, "content", None)
+                    tool_calls_delta = None
+                    try:
+                        tool_calls_delta = getattr(getattr(chunk, "message", None), "additional_kwargs", {}).get("tool_calls")
+                    except Exception:
+                        tool_calls_delta = None
+
+                    if content_delta or tool_calls_delta:
                         stream_response = ChatCompletionStreamResponse(
                             model=request.model,
                             choices=[ChatCompletionStreamChoice(
                                 index=0,
-                                delta=DeltaMessage(content=chunk.content)
+                                delta=DeltaMessage(content=content_delta, tool_calls=tool_calls_delta)
                             )]
                         )
                         yield f"data: {stream_response.json()}\n\n"
@@ -292,14 +306,23 @@ async def create_chat_completion(request: ChatCompletionRequest):
             response = await asyncio.to_thread(
                 chat_model.invoke,
                 lc_messages,
-                max_tokens=request.max_tokens
+                max_tokens=request.max_tokens,
+                tool_choice=request.tool_choice,
+                tools=request.tools
             )
+
+            # Extract potential tool_calls from model response
+            tool_calls = None
+            try:
+                tool_calls = response.additional_kwargs.get("tool_calls")  # type: ignore[attr-defined]
+            except Exception:
+                tool_calls = None
 
             completion_response = ChatCompletionResponse(
                 model=request.model,
                 choices=[ChatCompletionChoice(
                     index=0,
-                    message=ChatMessage(role="assistant", content=response.content)
+                    message=ChatMessage(role="assistant", content=response.content, tool_calls=tool_calls)
                 )]
             )
             return completion_response
