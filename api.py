@@ -10,6 +10,9 @@ from typing import List, Optional, Dict, Any, Union
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage
 from core.llm import OCAChatModel
 from core.oauth2_token_manager import OCAOauth2TokenManager
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # --- Pydantic Models for OpenAI Compatibility ---
 
@@ -78,20 +81,22 @@ async def lifespan(app: FastAPI):
     """
     Initialize core components at application startup and clean up on shutdown.
     """
-    print("--- Initializing core components ---")
+    logger.info("--- Initializing core components ---")
     try:
         token_manager = OCAOauth2TokenManager(dotenv_path=".env", debug=True)
         chat_model = OCAChatModel.from_env(token_manager, debug=True)
         lifespan_objects["chat_model"] = chat_model
-        print("--- Core components initialized successfully ---")
-    except (FileNotFoundError, ValueError) as e:
-        print(f"FATAL: Failed to initialize core components: {e}")
+        logger.info("--- Core components initialized successfully ---")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.exception("FATAL: Failed to initialize core components")
         # In this case, the application will not work properly.
         lifespan_objects["chat_model"] = None
 
     yield
 
-    print("--- Cleaning up resources ---")
+    logger.info("--- Cleaning up resources ---")
     lifespan_objects.clear()
 
 # --- FastAPI App Initialization ---
@@ -177,36 +182,42 @@ class ModelInfoList(BaseModel):
     data: List[ModelData]
 
 @app.get("/v1/model/info", response_model=ModelInfoList)
-async def list_models():
+async def list_models_info():
     """
     Provides a LiteLLM-compatible endpoint for listing available models with detailed info.
     """
-    chat_model = get_chat_model()
+    try:
+        chat_model = get_chat_model()
 
-    model_data_list = []
-    for model_id in chat_model.available_models:
-        model_data = ModelData(
-            model_name=model_id,
-            litellm_params=LiteLLMParams(
-                model=model_id
-            ),
-            model_info=ModelInfo(
-                id=model_id,
-                db_model=False,
-                key=model_id,
-                mode="chat",  # or "completion" depending on your models
-                litellm_provider="oca",  # your provider name
-                # Add token limits and pricing if available:
-                # max_tokens=4096,
-                # max_input_tokens=8192,
-                # max_output_tokens=4096,
-                # input_cost_per_token=0.00003,
-                # output_cost_per_token=0.00006,
+        model_data_list = []
+        for model_id in chat_model.available_models:
+            model_data = ModelData(
+                model_name=model_id,
+                litellm_params=LiteLLMParams(
+                    model=model_id
+                ),
+                model_info=ModelInfo(
+                    id=model_id,
+                    db_model=False,
+                    key=model_id,
+                    mode="chat",  # or "completion" depending on your models
+                    litellm_provider="oca",  # your provider name
+                    # Add token limits and pricing if available:
+                    # max_tokens=4096,
+                    # max_input_tokens=8192,
+                    # max_output_tokens=4096,
+                    # input_cost_per_token=0.00003,
+                    # output_cost_per_token=0.00006,
+                )
             )
-        )
-        model_data_list.append(model_data)
+            model_data_list.append(model_data)
 
-    return ModelInfoList(data=model_data_list)
+        return ModelInfoList(data=model_data_list)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.exception("Error in list_models_info")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/v1/spend/calculate")
 async def spend_calculate(request: Request):

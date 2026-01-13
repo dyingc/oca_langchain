@@ -11,3 +11,6 @@ wheels/
 
 # Confidential data
 .env
+.env.bak
+logs/*
+*.log

@@ -15,6 +15,19 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 
 # --- Local Imports ---
 from .oauth2_token_manager import OCAOauth2TokenManager, ConnectionMode
+import logging
+from .logger import get_logger
+
+logger = get_logger(__name__)
+
+def _redact_headers(h: dict) -> dict:
+    try:
+        redacted = dict(h or {})
+        if "Authorization" in redacted:
+            redacted["Authorization"] = "<redacted>"
+        return redacted
+    except Exception:
+        return {"<headers>": "<unavailable>"}
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """Convert a LangChain BaseMessage object to the dictionary format needed by the API."""
@@ -160,12 +173,32 @@ class OCAChatModel(BaseChatModel):
     def _stream(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
         headers = self._build_headers()
         payload = self._build_payload(messages, stream=True, **kwargs)
+        # Logging request
+        try:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("[LLM REQUEST] headers=%s payload=%s", json.dumps(_redact_headers(headers), ensure_ascii=False), json.dumps(payload, ensure_ascii=False))
+            else:
+                logger.info("[LLM REQUEST] %s", json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            pass
+        # Logging request
+        try:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("[LLM REQUEST] headers=%s payload=%s", json.dumps(_redact_headers(headers), ensure_ascii=False), json.dumps(payload, ensure_ascii=False))
+            else:
+                logger.info("[LLM REQUEST] %s", json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            pass
         try:
             response = self.token_manager.request(
                 method="POST", url=self.api_url, headers=headers, json=payload,
                 stream=True, _do_retry=False, request_timeout=self.llm_request_timeout
             )
             response.raise_for_status()
+            try:
+                self._last_response_headers = dict(response.headers)
+            except Exception:
+                self._last_response_headers = None
         except ConnectionError as e:
             print(f"Streaming API request failed: {e}. Retry is disabled.")
             raise
@@ -206,10 +239,21 @@ class OCAChatModel(BaseChatModel):
     async def _astream(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, run_manager: Optional[AsyncCallbackManagerForLLMRun] = None, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
         headers = self._build_headers()
         payload = self._build_payload(messages, stream=True, **kwargs)
+        # Logging request
+        try:
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug("[LLM REQUEST] headers=%s payload=%s", json.dumps(_redact_headers(headers), ensure_ascii=False), json.dumps(payload, ensure_ascii=False))
+            else:
+                self.logger.info("[LLM REQUEST] %s", json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            pass
+        full_async_content = ""
+        response_headers: dict = {}
         try:
             async for line in self.token_manager.async_stream_request(
                 method="POST", url=self.api_url, headers=headers, json=payload,
-                _do_retry=False, request_timeout=self.llm_request_timeout
+                _do_retry=False, request_timeout=self.llm_request_timeout,
+                on_open=lambda resp: response_headers.update(dict(resp.headers))
             ):
                 if line.startswith('data: '):
                     line_data = line[len('data: '):].strip()
@@ -240,8 +284,21 @@ class OCAChatModel(BaseChatModel):
                         if tool_calls_delta is not None:
                             additional_kwargs["tool_calls"] = tool_calls_delta
                         if content_delta or additional_kwargs:
+                            if content_delta:
+                                full_async_content += content_delta
                             yield ChatGenerationChunk(message=AIMessageChunk(content=content_delta or "", additional_kwargs=additional_kwargs))
                     except json.JSONDecodeError: continue
+            # After streaming completes, log final response
+            try:
+                if logger.isEnabledFor(logging.DEBUG):
+                    if response_headers:
+                        logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(response_headers, ensure_ascii=False), full_async_content)
+                    else:
+                        logger.debug("[LLM RESPONSE] body=%s", full_async_content)
+                else:
+                    logger.info("[LLM RESPONSE] %s", full_async_content)
+            except Exception:
+                pass
         except ConnectionError as e:
             print(f"Async streaming API request failed: {e}. Retry is disabled.")
             raise
@@ -302,6 +359,30 @@ class OCAChatModel(BaseChatModel):
                 if not isinstance(b["function"]["arguments"], str):
                     b["function"]["arguments"] = str(b["function"]["arguments"])
                 final_tool_calls.append(b)
+        # Log final response
+        try:
+            if logger.isEnabledFor(logging.DEBUG):
+                headers_to_log = getattr(self, "_last_response_headers", None)
+                if headers_to_log is not None:
+                    logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(headers_to_log, ensure_ascii=False), full_response_content)
+                else:
+                    logger.debug("[LLM RESPONSE] body=%s", full_response_content)
+            else:
+                logger.info("[LLM RESPONSE] %s", full_response_content)
+        except Exception:
+            pass
+        # Log final response
+        try:
+            if logger.isEnabledFor(logging.DEBUG):
+                headers_to_log = getattr(self, "_last_response_headers", None)
+                if headers_to_log is not None:
+                    logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(headers_to_log, ensure_ascii=False), full_response_content)
+                else:
+                    logger.debug("[LLM RESPONSE] body=%s", full_response_content)
+            else:
+                logger.info("[LLM RESPONSE] %s", full_response_content)
+        except Exception:
+            pass
         if final_tool_calls is not None:
             return ChatResult(generations=[ChatGeneration(message=AIMessage(content=full_response_content, additional_kwargs={"tool_calls": final_tool_calls}))])
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=full_response_content))])

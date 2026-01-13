@@ -2,7 +2,7 @@ import os
 import requests
 import httpx
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, AsyncIterator
+from typing import Optional, Dict, Any, AsyncIterator, Callable
 from urllib.parse import urlparse
 from enum import Enum
 
@@ -134,7 +134,7 @@ class OCAOauth2TokenManager:
                     print(f"Retry with {secondary_mode.value} mode failed: {e2}")
                 raise ConnectionError(f"Unable to connect to {url}. Both {primary_mode.value} and {secondary_mode.value} modes failed.") from e2
 
-    async def async_stream_request(self, method: str, url: str, _do_retry: bool = True, request_timeout: Optional[float] = None, **kwargs: Any) -> AsyncIterator[str]:
+    async def async_stream_request(self, method: str, url: str, _do_retry: bool = True, request_timeout: Optional[float] = None, on_open: Optional[Callable[[httpx.Response], None]] = None, **kwargs: Any) -> AsyncIterator[str]:
         """
         Perform an asynchronous streaming request.
         If _do_retry is True, uses the same logic as sync: try primary mode, failover to alternate mode and retry.
@@ -158,6 +158,11 @@ class OCAOauth2TokenManager:
             async with httpx.AsyncClient(proxy=primary_proxy_config) as client:
                 async with client.stream(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, **kwargs) as response:
                     response.raise_for_status()
+                    if on_open is not None:
+                        try:
+                            on_open(response)
+                        except Exception:
+                            pass
                     if self._debug:
                         print(f"Async streaming connection to {url} with mode {primary_mode.value} succeeded.")
                     async for line in response.aiter_lines():
@@ -184,6 +189,11 @@ class OCAOauth2TokenManager:
                 async with httpx.AsyncClient(proxy=secondary_proxy_config) as client:
                     async with client.stream(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, **kwargs) as response:
                         response.raise_for_status()
+                        if on_open is not None:
+                            try:
+                                on_open(response)
+                            except Exception:
+                                pass
                         if self._debug:
                             print(f"Async streaming retry with {secondary_mode.value} mode succeeded.")
                         async for line in response.aiter_lines():
