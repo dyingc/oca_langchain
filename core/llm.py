@@ -181,14 +181,6 @@ class OCAChatModel(BaseChatModel):
                 logger.info("[LLM REQUEST] %s", json.dumps(payload, ensure_ascii=False))
         except Exception:
             pass
-        # Logging request
-        try:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("[LLM REQUEST] headers=%s payload=%s", json.dumps(_redact_headers(headers), ensure_ascii=False), json.dumps(payload, ensure_ascii=False))
-            else:
-                logger.info("[LLM REQUEST] %s", json.dumps(payload, ensure_ascii=False))
-        except Exception:
-            pass
         try:
             response = self.token_manager.request(
                 method="POST", url=self.api_url, headers=headers, json=payload,
@@ -359,18 +351,6 @@ class OCAChatModel(BaseChatModel):
                 if not isinstance(b["function"]["arguments"], str):
                     b["function"]["arguments"] = str(b["function"]["arguments"])
                 final_tool_calls.append(b)
-        # Log final response
-        try:
-            if logger.isEnabledFor(logging.DEBUG):
-                headers_to_log = getattr(self, "_last_response_headers", None)
-                if headers_to_log is not None:
-                    logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(headers_to_log, ensure_ascii=False), full_response_content)
-                else:
-                    logger.debug("[LLM RESPONSE] body=%s", full_response_content)
-            else:
-                logger.info("[LLM RESPONSE] %s", full_response_content)
-        except Exception:
-            pass
         # Log final response
         try:
             if logger.isEnabledFor(logging.DEBUG):
