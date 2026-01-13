@@ -34,6 +34,44 @@ class OCAOauth2TokenManager:
         self.proxy_url: Optional[str] = os.getenv("HTTP_PROXY_URL")
         self._debug: bool = debug
 
+        # Combine system CA bundle with additional certificates from MULTI_CA_BUNDLE (comma-separated)
+        try:
+            extra_cas_raw = os.getenv("MULTI_CA_BUNDLE", "")
+            extra_cas = [p.strip() for p in extra_cas_raw.split(",") if p.strip()]
+            if extra_cas:
+                import certifi, tempfile, shutil, pathlib
+                system_pem = certifi.where()
+                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+                tmp_path = tmp_file.name
+                tmp_file.close()
+                with open(system_pem, "rb") as f_sys, open(tmp_path, "wb") as f_out:
+                    shutil.copyfileobj(f_sys, f_out)
+                    for ca_path in extra_cas:
+                        p = pathlib.Path(ca_path)
+                        if p.exists():
+                            try:
+                                with open(ca_path, "rb") as f_ca:
+                                    # Ensure there is a newline separator between bundles
+                                    f_out.write(b"\n")
+                                    shutil.copyfileobj(f_ca, f_out)
+                            except Exception:
+                                if self._debug:
+                                    print(f"Warning: failed to append CA file: {ca_path}")
+                        else:
+                            if self._debug:
+                                print(f"Warning: CA file not found, skipping: {ca_path}")
+                # Respect explicit REQUESTS_CA_BUNDLE if already set
+                if not os.getenv("REQUESTS_CA_BUNDLE"):
+                    os.environ["REQUESTS_CA_BUNDLE"] = tmp_path
+                # Also set SSL_CERT_FILE for httpx if not explicitly provided
+                if not os.getenv("SSL_CERT_FILE"):
+                    os.environ["SSL_CERT_FILE"] = tmp_path
+                if self._debug:
+                    print(f"Combined CA bundle created at {tmp_path}")
+        except Exception:
+            # Any failure in CA merge should not prevent startup; fall back to defaults
+            pass
+
         if not all([self.host, self.client_id]):
             raise ValueError("Error: Please ensure .env contains both OAUTH_HOST and OAUTH_CLIENT_ID.")
 
@@ -52,6 +90,8 @@ class OCAOauth2TokenManager:
 
         # Try loading any existing access token from .env
         self._load_token_from_env()
+        # Initialize connection mode from FORCE_PROXY env if set
+        self._update_connection_mode_from_env()
         if self._debug:
             print("OcaOauth2TokenManager initialized successfully.")
             print(f"Current connection mode: {self.connection_mode.value}")
@@ -68,6 +108,43 @@ class OCAOauth2TokenManager:
                 self.expires_at = expires_at
                 if self._debug:
                     print("Loaded a valid Access Token from .env file.")
+
+    def _update_connection_mode_from_env(self) -> None:
+        """
+        Dynamically enforce proxy usage based on FORCE_PROXY env.
+        If FORCE_PROXY=true, always switch to PROXY mode before sending the request.
+        If FORCE_PROXY is false or unset, keep current connection_mode to preserve existing auto-logic.
+        """
+        # Reload dotenv so edits to .env take effect without restarting the process
+        try:
+            load_dotenv(self.dotenv_path, override=True)
+        except Exception:
+            pass
+        # Refresh proxy_url if HTTP_PROXY_URL changed in environment
+        try:
+            current_proxy = os.getenv("HTTP_PROXY_URL")
+            if current_proxy != self.proxy_url:
+                self.proxy_url = current_proxy
+                if self._debug:
+                    print(f"HTTP_PROXY_URL updated to: {self.proxy_url or '<unset>'}")
+        except Exception:
+            pass
+        try:
+            force_proxy = os.getenv("FORCE_PROXY", "false").lower() == "true"
+        except Exception:
+            force_proxy = False
+        if force_proxy and self.connection_mode != ConnectionMode.PROXY:
+            if self._debug:
+                print("FORCE_PROXY enabled — switching to proxy mode for all requests.")
+            self.connection_mode = ConnectionMode.PROXY
+        # 当处于 PROXY 模式时，显式在环境变量中写入 *HTTP(S)_PROXY 以兼容部分库的自动代理解析
+        if self.connection_mode == ConnectionMode.PROXY and self.proxy_url:
+            for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+                os.environ[k] = self.proxy_url
+        else:
+            # 清理遗留值，避免 DIRECT 模式误走代理
+            for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+                os.environ.pop(k, None)
 
     def _get_proxies(self, mode: ConnectionMode) -> Optional[Dict[str, str]]:
         if mode == ConnectionMode.PROXY:
@@ -86,6 +163,8 @@ class OCAOauth2TokenManager:
         If both direct and proxy fails in the same call, raises ConnectionError.
         If _do_retry is False, only try once; failure immediately raises ConnectionError.
         """
+        # Dynamic check for FORCE_PROXY each request
+        self._update_connection_mode_from_env()
         primary_mode = self.connection_mode
         secondary_mode = ConnectionMode.PROXY if primary_mode == ConnectionMode.DIRECT else ConnectionMode.DIRECT
 
@@ -100,8 +179,10 @@ class OCAOauth2TokenManager:
             primary_mode, secondary_mode = secondary_mode, primary_mode
             primary_proxies = self._get_proxies(primary_mode)
 
+        ca_bundle = os.getenv("SSL_CERT_FILE") or os.getenv("REQUESTS_CA_BUNDLE")
+
         try:
-            response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=primary_proxies, **kwargs)
+            response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=primary_proxies, verify=(False if primary_mode == ConnectionMode.PROXY else ca_bundle), **kwargs)
             response.raise_for_status()
             if self._debug:
                 print(f"Successfully connected to {url} with mode {primary_mode.value}.")
@@ -124,7 +205,7 @@ class OCAOauth2TokenManager:
             if self._debug:
                 print(f"Retrying immediately with {secondary_mode.value} mode...")
             try:
-                response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=secondary_proxies, **kwargs)
+                response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=secondary_proxies, verify=ca_bundle, **kwargs)
                 response.raise_for_status()
                 if self._debug:
                     print(f"Retry with {secondary_mode.value} mode succeeded.")
@@ -140,6 +221,8 @@ class OCAOauth2TokenManager:
         If _do_retry is True, uses the same logic as sync: try primary mode, failover to alternate mode and retry.
         If _do_retry is False, try once only, on fail raise ConnectionError immediately.
         """
+        # Dynamic check for FORCE_PROXY each async request
+        self._update_connection_mode_from_env()
         primary_mode = self.connection_mode
         secondary_mode = ConnectionMode.PROXY if primary_mode == ConnectionMode.DIRECT else ConnectionMode.DIRECT
 
@@ -155,7 +238,28 @@ class OCAOauth2TokenManager:
             primary_proxy_config = None
 
         try:
-            async with httpx.AsyncClient(proxy=primary_proxy_config) as client:
+            ca_bundle = os.getenv("SSL_CERT_FILE") or os.getenv("REQUESTS_CA_BUNDLE")
+            if self._debug:
+                print(f"Using CA bundle for httpx: {ca_bundle or '<default>'}")
+                print(f"Using proxy for httpx: {'yes' if primary_proxy_config else 'no'}")
+
+            # 直接让 httpx 处理 HTTPS CONNECT；无需手动重写 URL
+
+            # 构造 httpx 传输层；避免 verify/proxy 重复并禁用环境代理变量
+            # 使用 AsyncHTTPTransport 明确设置 proxy，避免某些版本不支持 AsyncClient.proxies
+            transport = None
+            if primary_proxy_config:
+                transport = httpx.AsyncHTTPTransport(
+                    proxy=primary_proxy_config,
+                    verify=(False if primary_proxy_config else ca_bundle),
+                    trust_env=False,
+                )
+
+            async with httpx.AsyncClient(
+                transport=transport,
+                verify=(False if primary_proxy_config else ca_bundle),
+                trust_env=False,
+            ) as client:
                 async with client.stream(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, **kwargs) as response:
                     response.raise_for_status()
                     if on_open is not None:
@@ -186,7 +290,17 @@ class OCAOauth2TokenManager:
             if self._debug:
                 print(f"Retrying async streaming request immediately with mode {secondary_mode.value}...")
             try:
-                async with httpx.AsyncClient(proxy=secondary_proxy_config) as client:
+                ca_bundle = os.getenv("SSL_CERT_FILE") or os.getenv("REQUESTS_CA_BUNDLE")
+                if self._debug:
+                    print(f"Using CA bundle for httpx: {ca_bundle or '<default>'}")
+                    print(f"Using proxy for httpx: {'yes' if secondary_proxy_config else 'no'}")
+
+                mounts = None
+                if secondary_proxy_config:
+                    transport = httpx.AsyncHTTPTransport(proxy=secondary_proxy_config, verify=ca_bundle)
+                    mounts = {"http://": transport, "https://": transport}
+
+                async with httpx.AsyncClient(mounts=mounts, verify=ca_bundle) as client:
                     async with client.stream(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, **kwargs) as response:
                         response.raise_for_status()
                         if on_open is not None:

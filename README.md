@@ -84,9 +84,17 @@ LLM_TEMPERATURE="0.7"
 LLM_REQUEST_TIMEOUT="120"
 
 # --- Network Settings ---
+# Force all requests via HTTP proxy (set "true" to always use proxy; case-insensitive)
+FORCE_PROXY="false"
 # If the app cannot access OAuth or LLM API directly, specify a HTTP proxy
 # Example: http://user:password@proxy.example.com:8080
 HTTP_PROXY_URL=""
+
+# Additional CA certificates (comma-separated PEM paths; optional)
+# MULTI_CA_BUNDLE="./burp_ca.pem,./internal_ca.pem"
+
+# Optional: custom CA bundle path (if set, takes precedence)
+# REQUESTS_CA_BUNDLE=/path/to/bundle.pem
 
 # Connection timeout (seconds, supports float, recommended at least 2s; used for quick API requests like token/model fetch.)
 CONNECTION_TIMEOUT="2"
@@ -95,6 +103,25 @@ CONNECTION_TIMEOUT="2"
 OAUTH_ACCESS_TOKEN=
 OAUTH_ACCESS_TOKEN_EXPIRES_AT=
 ```
+
+### Proxy configuration and runtime debug
+
+- FORCE_PROXY: when set to "true", all OAuth/LLM requests go through the HTTP proxy even if direct access works.
+- Auto logic: when FORCE_PROXY is not "true", the manager prefers direct; on failure it retries via proxy and may stick to the last successful mode.
+- Runtime changes: the app reloads .env for every request; updating FORCE_PROXY or HTTP_PROXY_URL takes effect immediately without restart.
+- HTTPS interception / CA options:
+  - Option A (recommended for multiple CAs): set MULTI_CA_BUNDLE to a comma-separated list of PEM files. On startup, the app combines the system CA bundle (certifi) with these extra PEMs and sets REQUESTS_CA_BUNDLE to the combined file (only if REQUESTS_CA_BUNDLE is not already set).
+    - Example: MULTI_CA_BUNDLE="./burp_ca.pem,./internal_ca.pem"
+    - Note: the combination runs at startup for performance; update MULTI_CA_BUNDLE requires restarting the API server.
+  - Option B: set REQUESTS_CA_BUNDLE to an existing full bundle (takes precedence over MULTI_CA_BUNDLE).
+    - Example: REQUESTS_CA_BUNDLE=/path/to/ca_with_burp.pem
+
+Typical BURP setup:
+1) FORCE_PROXY="true"
+2) HTTP_PROXY_URL="http://127.0.0.1:8080"
+3) Either:
+   - MULTI_CA_BUNDLE="./burp_ca.pem" (auto-combine with system CAs on startup), or
+   - REQUESTS_CA_BUNDLE=/absolute/path/to/ca_with_burp.pem (pre-combined bundle)
 
 ## 🛠️ How to Run
 
