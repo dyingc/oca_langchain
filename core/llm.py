@@ -241,6 +241,8 @@ class OCAChatModel(BaseChatModel):
             pass
         full_async_content = ""
         response_headers: dict = {}
+        tool_builders_async: dict = {}
+        order_async: List[Any] = []
         try:
             async for line in self.token_manager.async_stream_request(
                 method="POST", url=self.api_url, headers=headers, json=payload,
@@ -275,20 +277,61 @@ class OCAChatModel(BaseChatModel):
                         additional_kwargs = {}
                         if tool_calls_delta is not None:
                             additional_kwargs["tool_calls"] = tool_calls_delta
+                        # Accumulate tool_calls into builders for final logging
+                        try:
+                            tcs = tool_calls_delta
+                            if isinstance(tcs, list):
+                                for tc in tcs:
+                                    idx = tc.get("index")
+                                    tid = tc.get("id")
+                                    if idx is not None:
+                                        key = ("i", idx)
+                                    elif tid is not None:
+                                        key = ("id", tid)
+                                    else:
+                                        key = ("i", 0)
+                                    if key not in tool_builders_async:
+                                        tool_builders_async[key] = {"type": "function", "id": tid, "function": {"name": None, "arguments": ""}}
+                                        order_async.append(key)
+                                    b = tool_builders_async[key]
+                                    if "type" in tc and tc["type"]:
+                                        b["type"] = tc["type"]
+                                    if tid and not b.get("id"):
+                                        b["id"] = tid
+                                    fdelta = tc.get("function") or {}
+                                    if "name" in fdelta and fdelta["name"]:
+                                        b["function"]["name"] = fdelta["name"]
+                                    if "arguments" in fdelta and fdelta["arguments"]:
+                                        b["function"]["arguments"] += fdelta["arguments"]
+                        except Exception:
+                            pass
                         if content_delta or additional_kwargs:
                             if content_delta:
                                 full_async_content += content_delta
                             yield ChatGenerationChunk(message=AIMessageChunk(content=content_delta or "", additional_kwargs=additional_kwargs))
                     except json.JSONDecodeError: continue
-            # After streaming completes, log final response
+            # After streaming completes, build final tool_calls and log final response
+            final_tool_calls_async = None
+            if order_async:
+                final_tool_calls_async = []
+                for key in order_async:
+                    b = tool_builders_async[key]
+                    if "function" not in b or b["function"] is None:
+                        b["function"] = {"name": None, "arguments": ""}
+                    if "arguments" not in b["function"] or b["function"]["arguments"] is None:
+                        b["function"]["arguments"] = ""
+                    if not isinstance(b["function"]["arguments"], str):
+                        b["function"]["arguments"] = str(b["function"]["arguments"])
+                    final_tool_calls_async.append(b)
             try:
+                log_obj = {"content": full_async_content, "tool_calls": final_tool_calls_async or []}
                 if logger.isEnabledFor(logging.DEBUG):
                     if response_headers:
-                        logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(response_headers, ensure_ascii=False), full_async_content)
+                        logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(response_headers, ensure_ascii=False), json.dumps(log_obj, ensure_ascii=False))
                     else:
-                        logger.debug("[LLM RESPONSE] body=%s", full_async_content)
+                        logger.debug("[LLM RESPONSE] body=%s", json.dumps(log_obj, ensure_ascii=False))
                 else:
-                    logger.info("[LLM RESPONSE] %s", full_async_content)
+                    logger.info("[LLM RESPONSE] %s", json.dumps(log_obj, ensure_ascii=False))
             except Exception:
                 pass
         except ConnectionError as e:
@@ -353,14 +396,15 @@ class OCAChatModel(BaseChatModel):
                 final_tool_calls.append(b)
         # Log final response
         try:
+            headers_to_log = getattr(self, "_last_response_headers", None)
+            log_obj = {"content": full_response_content, "tool_calls": final_tool_calls or []}
             if logger.isEnabledFor(logging.DEBUG):
-                headers_to_log = getattr(self, "_last_response_headers", None)
                 if headers_to_log is not None:
-                    logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(headers_to_log, ensure_ascii=False), full_response_content)
+                    logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(headers_to_log, ensure_ascii=False), json.dumps(log_obj, ensure_ascii=False))
                 else:
-                    logger.debug("[LLM RESPONSE] body=%s", full_response_content)
+                    logger.debug("[LLM RESPONSE] body=%s", json.dumps(log_obj, ensure_ascii=False))
             else:
-                logger.info("[LLM RESPONSE] %s", full_response_content)
+                logger.info("[LLM RESPONSE] %s", json.dumps(log_obj, ensure_ascii=False))
         except Exception:
             pass
         if final_tool_calls is not None:
