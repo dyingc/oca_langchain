@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage, ToolMessage
 from core.llm import OCAChatModel
 from core.oauth2_token_manager import OCAOauth2TokenManager
 from core.logger import get_logger
@@ -29,7 +29,8 @@ class ModelList(BaseModel):
 class ChatMessage(BaseModel):
     role: str
     content: Optional[Union[str, List[Dict[str, str]]]] = None
-    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None  # Present on assistant deltas
+    tool_call_id: Optional[str] = None                 # Present on tool role messages
 
 class ChatCompletionRequest(BaseModel):
     model: str
@@ -117,28 +118,42 @@ def get_chat_model() -> OCAChatModel:
 
 def convert_to_langchain_messages(messages: List[ChatMessage]) -> List[BaseMessage]:
     """
-    Convert Pydantic models to LangChain Message objects.
-    Handles cases where content is a string or a list of dictionaries.
+    Convert API ChatMessage list to LangChain BaseMessage list, preserving
+    tool_calls in assistant messages and translating tool role messages.
     """
-    lc_messages = []
+    lc_messages: List[BaseMessage] = []
     for msg in messages:
-        content_str = ""
+        # Normalize content
         if msg.content is None:
             content_str = ""
         elif isinstance(msg.content, str):
             content_str = msg.content
         elif isinstance(msg.content, list):
-            # Merge list of content chunks into a single string
-            processed_parts = []
-            for part in msg.content:
-                if isinstance(part, dict) and "text" in part:
-                    processed_parts.append(part["text"])
-            content_str = "\n".join(processed_parts)
+            parts = [part.get("text", "") for part in msg.content if isinstance(part, dict)]
+            content_str = "\n".join(parts)
+        else:
+            content_str = str(msg.content)
 
+        # Role mapping
         if msg.role == "user":
             lc_messages.append(HumanMessage(content=content_str))
+
         elif msg.role == "assistant":
-            lc_messages.append(AIMessage(content=content_str))
+            # 仅当存在 tool_calls 时才传 additional_kwargs，避免空 dict 触发验证异常
+            if msg.tool_calls:
+                lc_messages.append(
+                    AIMessage(content=content_str, additional_kwargs={"tool_calls": msg.tool_calls})
+                )
+            else:
+                lc_messages.append(AIMessage(content=content_str))
+
+        elif msg.role == "tool":
+            # 当 tool_call_id 为空时省略该字段
+            if msg.tool_call_id:
+                lc_messages.append(ToolMessage(content=content_str, tool_call_id=msg.tool_call_id))
+            else:
+                lc_messages.append(ToolMessage(content=content_str))
+
         elif msg.role == "system":
             lc_messages.append(SystemMessage(content=content_str))
 

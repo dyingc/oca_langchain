@@ -10,7 +10,7 @@ from typing import Any, List, Mapping, Optional, Iterator, AsyncIterator
 # --- LangChain Imports ---
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun, AsyncCallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage, AIMessage, AIMessageChunk, HumanMessage
+from langchain_core.messages import BaseMessage, AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 # --- Local Imports ---
@@ -31,9 +31,81 @@ def _redact_headers(h: dict) -> dict:
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """Convert a LangChain BaseMessage object to the dictionary format needed by the API."""
-    role_map = {AIMessage: "assistant", HumanMessage: "user"}
+    role_map = {AIMessage: "assistant", HumanMessage: "user", ToolMessage: "tool"}
     role = role_map.get(type(message), "system")
-    return {"role": role, "content": message.content}
+    d: dict = {"role": role, "content": getattr(message, "content", "")}
+
+    # Prefer new LangChain attributes when present
+    try:
+        tool_calls_attr = getattr(message, "tool_calls", None)
+        if tool_calls_attr:
+            # 将旧版 {"name": ..., "args": {...}, "id": ..., "type": "tool_call"}
+            # 转换为新版 {"type":"function","id":...,"function":{"name":...,"arguments":"{...}"}}
+            def _to_openai(tc: dict) -> dict:
+                # 已是新版格式，直接返回
+                if tc.get("type") == "function" and tc.get("function"):
+                    return tc
+                # 处理旧版格式
+                if "name" in tc and "args" in tc:
+                    return {
+                        "type": "function",
+                        "id": tc.get("id"),
+                        "function": {
+                            "name": tc.get("name"),
+                            "arguments": json.dumps(tc.get("args") or {}, ensure_ascii=False),
+                        },
+                    }
+                # 其它情况保持原样
+                return tc
+            if isinstance(tool_calls_attr, list):
+                d["tool_calls"] = [_to_openai(t) for t in tool_calls_attr]
+            else:
+                d["tool_calls"] = [_to_openai(tool_calls_attr)]
+    except Exception:
+        pass
+
+    # Fallback to additional_kwargs for older versions/providers
+    try:
+        ak = getattr(message, "additional_kwargs", {}) or {}
+        if "tool_calls" in ak and ak["tool_calls"] is not None and "tool_calls" not in d:
+            # Normalize to legacy {"name": ..., "args": {...}, "id": ..., "type": "tool_call"} format
+            def _to_legacy(tc: dict) -> dict:
+                # Already legacy
+                if "name" in tc and "args" in tc:
+                    return tc
+                # Newer OpenAI format
+                if tc.get("type") == "function":
+                    func = tc.get("function") or {}
+                    name = func.get("name")
+                    args_raw = func.get("arguments") or "{}"
+                    try:
+                        args_obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                    except Exception:
+                        args_obj = {}
+                    return {
+                        "name": name,
+                        "args": args_obj,
+                        "id": tc.get("id"),
+                        "type": "tool_call",
+                    }
+                return tc
+            d["tool_calls"] = [_to_legacy(t) for t in ak["tool_calls"]]
+        if "function_call" in ak and ak["function_call"] is not None and "function_call" not in d:
+            # legacy providers emitting function_call instead of tool_calls
+            d["function_call"] = ak["function_call"]
+    except Exception:
+        pass
+
+    # Preserve tool message linkage to the originating tool_call
+    try:
+        if isinstance(message, ToolMessage):
+            tool_call_id = getattr(message, "tool_call_id", None)
+            if tool_call_id:
+                d["tool_call_id"] = tool_call_id
+    except Exception:
+        pass
+
+    return d
 
 class OCAChatModel(BaseChatModel):
     """
