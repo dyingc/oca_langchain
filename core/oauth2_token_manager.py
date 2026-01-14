@@ -156,9 +156,10 @@ class OCAOauth2TokenManager:
                 return None
         return {} # direct connection
 
-    def request(self, method: str, url: str, _do_retry: bool = True, request_timeout: Optional[float] = None, **kwargs: Any) -> requests.Response:
+    def request(self, method: str, url: str, _do_retry: bool = True, request_timeout: Optional[float] = None, force_disable_verify: bool = False, **kwargs: Any) -> requests.Response:
         """
         Perform a synchronous request.
+        Set force_disable_verify=True to explicitly disable SSL verification for this call.
         If _do_retry is True, it tries using the current self.connection_mode. If it fails, switches mode and retries once.
         If both direct and proxy fails in the same call, raises ConnectionError.
         If _do_retry is False, only try once; failure immediately raises ConnectionError.
@@ -181,8 +182,13 @@ class OCAOauth2TokenManager:
 
         ca_bundle = os.getenv("SSL_CERT_FILE") or os.getenv("REQUESTS_CA_BUNDLE")
 
+        # Global or per-call switch to disable SSL verification
+        force_disable_env = os.getenv("DISABLE_SSL_VERIFY", "false").lower() == "true"
+        force_disable = force_disable_verify or force_disable_env
+        primary_verify = False if (force_disable or primary_mode == ConnectionMode.PROXY) else ca_bundle
+
         try:
-            response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=primary_proxies, verify=(False if primary_mode == ConnectionMode.PROXY else ca_bundle), **kwargs)
+            response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=primary_proxies, verify=primary_verify, **kwargs)
             response.raise_for_status()
             if self._debug:
                 print(f"Successfully connected to {url} with mode {primary_mode.value}.")
@@ -204,8 +210,10 @@ class OCAOauth2TokenManager:
             # Second attempt
             if self._debug:
                 print(f"Retrying immediately with {secondary_mode.value} mode...")
+
+            secondary_verify = False if (force_disable or secondary_mode == ConnectionMode.PROXY) else ca_bundle
             try:
-                response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=secondary_proxies, verify=ca_bundle, **kwargs)
+                response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=secondary_proxies, verify=secondary_verify, **kwargs)
                 response.raise_for_status()
                 if self._debug:
                     print(f"Retry with {secondary_mode.value} mode succeeded.")
@@ -346,7 +354,8 @@ class OCAOauth2TokenManager:
                 url=token_url,
                 headers=headers,
                 data=data,
-                _do_retry=False
+                _do_retry=False,
+                force_disable_verify=True
             )
         except ConnectionError as e:
             if self._debug:
