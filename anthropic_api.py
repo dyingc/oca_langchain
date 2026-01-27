@@ -176,6 +176,9 @@ async def anthropic_stream_generator(
     """
     Generate Anthropic-compatible streaming events from LangChain stream.
 
+    Handles both text content and tool_calls, converting OpenAI format tool_calls
+    to Anthropic format tool_use content blocks.
+
     Args:
         lc_messages: LangChain messages
         model: Model identifier
@@ -196,39 +199,132 @@ async def anthropic_stream_generator(
         # Start streaming from LangChain
         content_buffer = ""
         block_index = 0
+        text_block_started = False
+        text_block_has_content = False
 
-        # Send content_block_start for text
-        yield generate_content_block_start(
-            index=block_index,
-            content_block={"type": "text", "text": ""}
-        )
+        # Track tool_calls state
+        # Key: tool index (from OpenAI format), Value: dict with id, name, arguments_buffer, block_index, started
+        tool_states: dict[int, dict] = {}
+        stop_reason = "end_turn"
 
-        # Stream text content
+        # Stream content
         async for chunk in chat_model.astream(lc_messages, max_tokens=max_tokens, tools=tools):
-            content_delta = getattr(chunk, "content", None)
+            # The chunk can be either:
+            # - ChatGenerationChunk (with .message attribute containing AIMessageChunk)
+            # - AIMessageChunk directly
+            # We need to handle both cases
+            if hasattr(chunk, "message") and chunk.message is not None:
+                message = chunk.message
+            else:
+                # chunk itself is the message (AIMessageChunk)
+                message = chunk
+
+            # Get content and additional_kwargs from the message
+            content_delta = getattr(message, "content", None)
+            additional_kwargs = getattr(message, "additional_kwargs", {})
             if content_delta:
+                # Start text block on first text content
+                if not text_block_started:
+                    yield generate_content_block_start(
+                        index=block_index,
+                        content_block={"type": "text", "text": ""}
+                    )
+                    text_block_started = True
+
                 content_buffer += content_delta
+                text_block_has_content = True
                 yield generate_content_block_delta(
                     index=block_index,
                     delta_type="text_delta",
                     text=content_delta
                 )
 
-        # Send content_block_stop for text
-        yield generate_content_block_stop(block_index)
+            # Handle tool_calls from additional_kwargs (already extracted above)
+            tool_calls_delta = additional_kwargs.get("tool_calls")
 
-        # Check for tool_calls
-        # Note: In streaming mode, tool_calls would be accumulated
-        # For PoC, we'll handle simple text streaming first
-        # Tool calls in streaming will be implemented in Sprint 2
+            if tool_calls_delta:
+                # Close text block if it was started and has content
+                if text_block_started and text_block_has_content:
+                    yield generate_content_block_stop(block_index)
+                    block_index += 1
+                    text_block_started = False
+                    text_block_has_content = False
+
+                for tc in tool_calls_delta:
+                    tc_index = tc.get("index", 0)
+                    tc_id = tc.get("id")
+                    tc_type = tc.get("type")
+                    tc_function = tc.get("function", {})
+                    tc_name = tc_function.get("name")
+                    tc_arguments = tc_function.get("arguments", "")
+
+                    # Initialize tool state if this is a new tool
+                    if tc_index not in tool_states:
+                        tool_states[tc_index] = {
+                            "id": tc_id,
+                            "name": tc_name,
+                            "arguments_buffer": "",
+                            "block_index": block_index + tc_index,
+                            "started": False
+                        }
+
+                    state = tool_states[tc_index]
+
+                    # Update id and name if provided (they come in the first chunk)
+                    if tc_id and not state["id"]:
+                        state["id"] = tc_id
+                    if tc_name and not state["name"]:
+                        state["name"] = tc_name
+
+                    # Send content_block_start for this tool if not started
+                    if not state["started"] and state["id"] and state["name"]:
+                        # Convert OpenAI tool call ID to Anthropic format
+                        anthropic_id = state["id"]
+                        if anthropic_id.startswith("call_"):
+                            anthropic_id = "toolu_" + anthropic_id[5:]
+
+                        yield generate_content_block_start(
+                            index=state["block_index"],
+                            content_block={
+                                "type": "tool_use",
+                                "id": anthropic_id,
+                                "name": state["name"],
+                                "input": {}
+                            }
+                        )
+                        state["started"] = True
+
+                    # Stream argument fragments as input_json_delta
+                    if tc_arguments and state["started"]:
+                        state["arguments_buffer"] += tc_arguments
+                        yield generate_content_block_delta(
+                            index=state["block_index"],
+                            delta_type="input_json_delta",
+                            partial_json=tc_arguments
+                        )
+
+                # Set stop_reason to tool_use if we have tool calls
+                stop_reason = "tool_use"
+
+        # Close text block if it was started but not closed
+        if text_block_started:
+            yield generate_content_block_stop(block_index)
+            block_index += 1
+
+        # Close all tool blocks
+        for tc_index, state in sorted(tool_states.items()):
+            if state["started"]:
+                yield generate_content_block_stop(state["block_index"])
 
         # Send message_delta with usage
         # Note: Accurate token counting requires backend support
         usage = AnthropicUsage(
             input_tokens=0,  # Backend should provide this
-            output_tokens=len(content_buffer.split())  # Rough estimate
+            output_tokens=len(content_buffer.split()) + sum(
+                len(s["arguments_buffer"]) for s in tool_states.values()
+            ) // 4  # Rough estimate
         )
-        yield generate_message_delta("end_turn", usage)
+        yield generate_message_delta(stop_reason, usage)
 
         # Send message_stop
         yield generate_message_stop()
