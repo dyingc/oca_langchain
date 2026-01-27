@@ -12,6 +12,9 @@ from core.llm import OCAChatModel
 from core.oauth2_token_manager import OCAOauth2TokenManager
 from core.logger import get_logger
 
+# Import Anthropic API endpoints
+from anthropic_api import create_message
+
 logger = get_logger(__name__)
 
 # --- Pydantic Models for OpenAI Compatibility ---
@@ -355,6 +358,34 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+# --- Anthropic-Compatible Endpoints ---
+
+from models.anthropic_types import AnthropicRequest
+
+@app.post("/v1/messages")
+async def anthropic_create_message(
+    request: AnthropicRequest
+):
+    """
+    Anthropic-compatible /v1/messages endpoint.
+
+    Provides compatibility with Anthropic's Messages API, supporting both
+    non-streaming and streaming responses. This endpoint allows clients
+    using the Anthropic SDK to communicate with our OCA backend.
+
+    The endpoint handles:
+    - Message format conversion (Anthropic ↔ LangChain)
+    - Tool calls (Anthropic format ↔ OpenAI format)
+    - Streaming responses (Anthropic SSE format)
+
+    Args:
+        request: AnthropicRequest with Anthropic-formatted messages
+
+    Returns:
+        AnthropicResponse (non-streaming) or StreamingResponse (streaming)
+    """
+    return await create_message(request)
 
 if __name__ == "__main__":
     # For direct execution and testing, use uvicorn:

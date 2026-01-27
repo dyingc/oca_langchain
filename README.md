@@ -7,10 +7,13 @@ It solves the core problems of integrating private or protected LLM services req
 ## ✨ Main Features
 
 - **Complete OAuth2 Refresh Token Workflow**: Automatically uses a `Refresh Token` to obtain a temporary `Access Token`, supports token rotation, and persists the latest `Refresh Token` to `.env`.
-- **OpenAI-Compatible FastAPI Service**: Offers `/v1/models` and `/v1/chat/completions` endpoints, allows direct OpenAI API replacement, supporting both streaming & non-streaming.
+- **Dual API Compatibility**:
+  - **OpenAI-Compatible**: `/v1/models` and `/v1/chat/completions` endpoints
+  - **Anthropic-Compatible**: `/v1/messages` endpoint (Messages API)
+- **Universal SDK Support**: Works with both OpenAI and Anthropic Python/JavaScript SDKs
 - **Token Persistence and Caching**: Successfully retrieved `Access Tokens` are written to `.env` and can be reused if not expired after a restart.
 - **Seamless LangChain Integration**: Follows `BaseChatModel`, can be called normally via `invoke / stream / astream`.
-- **Supports Streaming Responses**: Complete SSE parsing and real-time model output.
+- **Supports Streaming Responses**: Complete SSE parsing and real-time model output for both API formats.
 - **Config Driven**: All sensitive info and model parameters are in `.env`.
 - **Async Support**: Both synchronous `requests` and asynchronous `httpx` backend implementations.
 - **Intelligent Network Retry & Timeout**: Scenario-adaptive strategy ensures stability and performance, with separate policies for quick operations and long-running inference.
@@ -19,9 +22,21 @@ It solves the core problems of integrating private or protected LLM services req
 ```
 .
 ├── app.py                    # Streamlit chatbot UI
-├── api.py                    # OpenAI-compatible FastAPI service
-├── core/llm.py               # Core: OCAChatModel
-├── core/oauth2_token_manager.py   # OAuth2 token management
+├── api.py                    # FastAPI service (OpenAI + Anthropic compatible)
+├── anthropic_api.py          # Anthropic Messages API endpoints
+├── models/                   # API type definitions
+│   └── anthropic_types.py    # Anthropic Pydantic models
+├── converters/               # Format converters
+│   └── anthropic_request_converter.py  # Anthropic ↔ LangChain
+├── core/
+│   ├── llm.py               # Core: OCAChatModel
+│   └── oauth2_token_manager.py   # OAuth2 token management
+├── tests/                   # Test scripts
+│   └── test_anthropic_api.sh
+├── examples/                # Usage examples
+│   └── anthropic_examples.py
+├── docs/                    # Documentation
+│   └── ANTHROPIC_API.md     # Anthropic API guide
 ├── run_api.sh                # One-click API service launcher
 ├── run_ui.sh                 # One-click Streamlit UI launcher
 ├── .env                      # Environment config (create manually)
@@ -178,7 +193,7 @@ This will launch a local web server and open the chatbot UI in your browser. You
   - **Dynamic Model List Fetching**: At init, tries to fetch available models via `LLM_MODELS_API_URL`, and supports manual refresh in UI.
   - **Independent Inference Timeout**: LLM inference uses `LLM_REQUEST_TIMEOUT` for long outputs.
 
-### Start the OpenAI-Compatible API Server
+### Start the API Server
 
 ```bash
 # Option 1: Start with uvicorn directly
@@ -189,11 +204,18 @@ bash run_api.sh
 ```
 The service listens on port **8000** by default.
 
-**Main Endpoints**
+**OpenAI-Compatible Endpoints**
 | Method | Path | Description        |
 |--------|------|-------------------|
 | GET    | /v1/models           | Get available model list |
 | POST   | /v1/chat/completions | Chat completion (supports `stream=true`) |
+
+**Anthropic-Compatible Endpoints**
+| Method | Path | Description        |
+|--------|------|-------------------|
+| POST   | /v1/messages | Messages API completion (supports `stream=true`) |
+
+> **Note**: Both endpoints share the same backend infrastructure and OAuth2 authentication.
 
 **Quick Usage Example**
 
@@ -217,3 +239,77 @@ curl http://localhost:8000/v1/chat/completions \
       }'
 ```
 Python:
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="any")
+
+response = client.chat.completions.create(
+    model="your-model-name",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+
+print(response.choices[0].message.content)
+```
+
+## 🔷 Anthropic Messages API
+
+The service also provides compatibility with Anthropic's Messages API, allowing you to use the official Anthropic SDK with your custom backend.
+
+### Quick Start
+
+Install the Anthropic SDK:
+```bash
+pip install anthropic
+```
+
+Basic usage:
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://localhost:8000",
+    api_key="test"  # Optional
+)
+
+message = client.messages.create(
+    model="your-model-name",
+    max_tokens=100,
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+
+print(message.content[0].text)
+```
+
+### Anthropic-Specific Features
+
+- **Tool/Function Calling**: Use Anthropic's tool definition format
+- **Streaming Events**: Full SSE support with 6 event types
+- **Multipart Content**: Text + tool_use + tool_result in single response
+
+**Curl Example (Anthropic Format):**
+```bash
+curl http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: test" \
+  -d '{
+    "model": "your-model-name",
+    "max_tokens": 100,
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+For detailed documentation, see [docs/ANTHROPIC_API.md](docs/ANTHROPIC_API.md)
+
+### Testing
+
+**Test OpenAI endpoint:**
+```bash
+bash tests/test_anthropic_api.sh
+```
+
+**Run Python examples:**
+```bash
+python examples/anthropic_examples.py
+```
+
