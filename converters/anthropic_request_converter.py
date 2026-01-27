@@ -52,33 +52,51 @@ def anthropic_to_langchain_messages(
         if msg.role == "user":
             # Handle content: can be string or list of content blocks
             if isinstance(msg.content, str):
-                content_str = msg.content
+                lc_messages.append(HumanMessage(content=msg.content))
             elif isinstance(msg.content, list):
-                # Extract text from content blocks
-                text_parts = []
-                for block in msg.content:
-                    if block.type == "text":
-                        text_parts.append(block.text or "")
-                    elif block.type == "image":
-                        # Future: handle image blocks
-                        text_parts.append("[Image]")
-                    elif block.type == "tool_result":
-                        # Handle tool result
-                        tool_content = block.content
-                        if isinstance(tool_content, str):
-                            text_parts.append(tool_content)
-                        elif isinstance(tool_content, list):
-                            # Extract text from tool result content blocks
-                            for sub_block in tool_content:
-                                if isinstance(sub_block, dict) and sub_block.get("type") == "text":
-                                    text_parts.append(sub_block.get("text", ""))
-                                elif isinstance(sub_block, str):
-                                    text_parts.append(sub_block)
-                content_str = "\n".join(text_parts)
-            else:
-                content_str = str(msg.content)
+                # Separate tool_result blocks from other content blocks
+                tool_result_blocks = [b for b in msg.content if b.type == "tool_result"]
+                other_blocks = [b for b in msg.content if b.type != "tool_result"]
 
-            lc_messages.append(HumanMessage(content=content_str))
+                # Process other content blocks (text, image) as HumanMessage
+                if other_blocks:
+                    text_parts = []
+                    for block in other_blocks:
+                        if block.type == "text":
+                            text_parts.append(block.text or "")
+                        elif block.type == "image":
+                            # Future: handle image blocks
+                            text_parts.append("[Image]")
+                    if text_parts:
+                        lc_messages.append(HumanMessage(content="\n".join(text_parts)))
+
+                # Process tool_result blocks as ToolMessage (OpenAI format)
+                for block in tool_result_blocks:
+                    tool_use_id = block.tool_use_id or ""
+                    tool_content = block.content
+
+                    # Extract content string from tool_result
+                    if isinstance(tool_content, str):
+                        content_str = tool_content
+                    elif isinstance(tool_content, list):
+                        # Extract text from tool result content blocks
+                        content_parts = []
+                        for sub_block in tool_content:
+                            if isinstance(sub_block, dict) and sub_block.get("type") == "text":
+                                content_parts.append(sub_block.get("text", ""))
+                            elif isinstance(sub_block, str):
+                                content_parts.append(sub_block)
+                        content_str = "\n".join(content_parts)
+                    else:
+                        content_str = str(tool_content) if tool_content else ""
+
+                    # Create ToolMessage for OpenAI compatibility
+                    lc_messages.append(ToolMessage(
+                        content=content_str,
+                        tool_call_id=tool_use_id
+                    ))
+            else:
+                lc_messages.append(HumanMessage(content=str(msg.content)))
 
         elif msg.role == "assistant":
             # Handle content: can be string or list of content blocks
