@@ -29,6 +29,184 @@ def _redact_headers(h: dict) -> dict:
     except Exception:
         return {"<headers>": "<unavailable>"}
 
+def _calculate_message_weight(msg: BaseMessage) -> int:
+    """
+    Calculate the weight of a message for tool call sequence validation.
+
+    Weight rules:
+    - 0: HumanMessage or AIMessage without tool_calls (clean messages)
+    - >0: AIMessage with tool_calls (weight = number of tool_calls)
+    - -1: ToolMessage (orphan candidate)
+
+    Args:
+        msg: LangChain BaseMessage object
+
+    Returns:
+        int: Weight of the message (-1, 0, or positive integer)
+    """
+    if isinstance(msg, ToolMessage):
+        return -1
+    elif isinstance(msg, AIMessage):
+        # Check for tool_calls in either attribute
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not tool_calls:
+            # Check additional_kwargs for legacy format
+            additional_kwargs = getattr(msg, "additional_kwargs", {}) or {}
+            tool_calls = additional_kwargs.get("tool_calls")
+        if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
+            return len(tool_calls)
+        return 0
+    else:
+        # HumanMessage or other types
+        return 0
+
+
+def _validate_tool_call_sequences(messages: List[BaseMessage]) -> List[BaseMessage]:
+    """
+    Validate and fix incomplete tool_call sequences using a weight-based algorithm.
+
+    Algorithm:
+    1. Calculate weight for each message:
+       - Weight 0: HumanMessage or clean AIMessage (no tool_calls)
+       - Weight >0: AIMessage with tool_calls (weight = number of tool_calls)
+       - Weight -1: ToolMessage
+
+    2. Process messages:
+       - Weight 0: Add directly to valid list
+       - Weight -1: Discard (orphaned tool message)
+       - Weight >0: Start collecting tool call sequence
+         - Use temp to collect sequence (AI + matching tool messages)
+         - Use temp_2 to delay interrupting messages (weight >= 0)
+         - Track remaining_ids to find matching tool messages
+
+    3. When sequence complete (remaining_ids empty):
+       - Add temp to valid
+       - Prepend temp_2 to remaining messages (delay interruptions)
+
+    4. When sequence incomplete (messages exhausted):
+       - Remove unmatched tool_calls from AI message
+       - Add cleaned temp to valid
+       - Prepend temp_2 to remaining messages
+
+    Args:
+        messages: List of LangChain BaseMessage objects
+
+    Returns:
+        List of validated BaseMessage objects with complete tool call sequences
+    """
+    valid_messages: List[BaseMessage] = []
+    remaining_messages = messages.copy()
+
+    while remaining_messages:
+        msg = remaining_messages.pop(0)
+        weight = _calculate_message_weight(msg)
+
+        # Weight 0: Clean message, add directly
+        if weight == 0:
+            valid_messages.append(msg)
+            continue
+
+        # Weight -1: Orphaned tool message, discard
+        if weight == -1:
+            logger.warning(f"[VALIDATION] Discarding orphaned tool message: {msg.tool_call_id[:8] if msg.tool_call_id else 'unknown'}...")
+            continue
+
+        # Weight > 0: AIMessage with tool_calls, start sequence validation
+        temp: List[BaseMessage] = [msg]
+
+        # Extract tool_call_ids from AIMessage
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not tool_calls:
+            additional_kwargs = getattr(msg, "additional_kwargs", {}) or {}
+            tool_calls = additional_kwargs.get("tool_calls")
+
+        if not tool_calls or not isinstance(tool_calls, list):
+            # Should not happen, but handle gracefully
+            valid_messages.append(msg)
+            continue
+
+        # Collect all tool_call_ids
+        remaining_ids = set()
+        for tc in tool_calls:
+            tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+            if tc_id:
+                remaining_ids.add(tc_id)
+
+        temp_2: List[BaseMessage] = []  # Delayed interrupting messages
+
+        # Process remaining messages to complete the sequence
+        while remaining_ids and remaining_messages:
+            next_msg = remaining_messages[0]  # Peek, don't pop yet
+            next_weight = _calculate_message_weight(next_msg)
+
+            if next_weight == -1:
+                # Tool message - pop and process
+                remaining_messages.pop(0)
+                tool_call_id = getattr(next_msg, "tool_call_id", None)
+                if tool_call_id in remaining_ids:
+                    # Matching tool result
+                    temp.append(next_msg)
+                    remaining_ids.remove(tool_call_id)
+                else:
+                    # Non-matching tool message, discard
+                    logger.warning(f"[VALIDATION] Discarding non-matching tool result: {tool_call_id[:8] if tool_call_id else 'unknown'}... (expected: {', '.join(list(remaining_ids)[:3])})")
+            else:
+                # Interrupting message (weight >= 0)
+                # Add it to temp_2 and STOP collecting for this sequence
+                temp_2.append(next_msg)
+                remaining_messages.pop(0)  # Remove from remaining
+                break  # Exit the collection loop
+
+        # Sequence validation result
+        if not remaining_ids:
+            # Complete sequence
+            valid_messages.extend(temp)
+        else:
+            # Incomplete sequence: remove unmatched tool_calls from AI message
+            ai_msg = temp[0]
+            original_tool_calls = getattr(ai_msg, "tool_calls", None)
+            if not original_tool_calls:
+                additional_kwargs = getattr(ai_msg, "additional_kwargs", {}) or {}
+                original_tool_calls = additional_kwargs.get("tool_calls")
+
+            if original_tool_calls and isinstance(original_tool_calls, list):
+                # Filter tool_calls to keep only matched ones
+                matched_tool_calls = [
+                    tc for tc in original_tool_calls
+                    if (tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)) not in remaining_ids
+                ]
+
+                logger.warning(f"[VALIDATION] Incomplete tool call sequence: {len(remaining_ids)} tool(s) not matched. Removed unmatched tool_calls from AI message.")
+
+                if matched_tool_calls:
+                    # Update the message with matched tool_calls
+                    if hasattr(ai_msg, "tool_calls"):
+                        ai_msg.tool_calls = matched_tool_calls
+                    else:
+                        additional_kwargs = getattr(ai_msg, "additional_kwargs", {}) or {}
+                        additional_kwargs = dict(additional_kwargs)  # Make mutable copy
+                        additional_kwargs["tool_calls"] = matched_tool_calls
+                        # Create new AIMessage with updated additional_kwargs
+                        ai_msg = AIMessage(
+                            content=ai_msg.content,
+                            additional_kwargs=additional_kwargs
+                        )
+                    temp[0] = ai_msg
+                else:
+                    # No tool_calls matched, convert to clean AIMessage
+                    logger.warning(f"[VALIDATION] All tool_calls unmatched, converting to clean AIMessage")
+                    clean_ai_msg = AIMessage(content=ai_msg.content)
+                    temp[0] = clean_ai_msg
+
+            valid_messages.extend(temp)
+
+        # Delay interrupting messages by putting them back at the front
+        if temp_2:
+            remaining_messages = temp_2 + remaining_messages
+
+    return valid_messages
+
+
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """Convert a LangChain BaseMessage object to the dictionary format needed by the API."""
     role_map = {AIMessage: "assistant", HumanMessage: "user", ToolMessage: "tool"}
@@ -243,8 +421,11 @@ class OCAChatModel(BaseChatModel):
         return payload
 
     def _stream(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
+        # Validate and fix tool call sequences before processing
+        validated_messages = _validate_tool_call_sequences(messages)
+
         headers = self._build_headers()
-        payload = self._build_payload(messages, stream=True, **kwargs)
+        payload = self._build_payload(validated_messages, stream=True, **kwargs)
         # Logging request
         try:
             if logger.isEnabledFor(logging.DEBUG):
@@ -301,8 +482,11 @@ class OCAChatModel(BaseChatModel):
                 except json.JSONDecodeError: continue
 
     async def _astream(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, run_manager: Optional[AsyncCallbackManagerForLLMRun] = None, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
+        # Validate and fix tool call sequences before processing
+        validated_messages = _validate_tool_call_sequences(messages)
+
         headers = self._build_headers()
-        payload = self._build_payload(messages, stream=True, **kwargs)
+        payload = self._build_payload(validated_messages, stream=True, **kwargs)
         # Logging request
         try:
             if self.logger.isEnabledFor(logging.DEBUG):

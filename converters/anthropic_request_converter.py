@@ -27,106 +27,118 @@ from models.anthropic_types import (
 )
 
 
-def validate_and_fix_anthropic_message_sequence(
-    anthropic_messages: List[AnthropicMessage]
-) -> List[AnthropicMessage]:
-    """
-    Validate and fix incomplete tool_use sequences in Anthropic message history.
-
-    When an assistant message contains tool_use blocks, it must be immediately
-    followed by user messages containing tool_result blocks for each tool_use_id.
-    No other assistant messages should appear in between.
-
-    This function detects violations and removes incomplete tool_use blocks
-    and their orphaned tool_results.
-
-    Args:
-        anthropic_messages: List of AnthropicMessage objects to validate
-
-    Returns:
-        Cleaned list of AnthropicMessage objects with valid tool_use sequences
-    """
-    cleaned_messages = []
-    i = 0
-
-    while i < len(anthropic_messages):
-        msg = anthropic_messages[i]
-
-        # Check if this is an assistant message with tool_use blocks
-        if msg.role == "assistant" and isinstance(msg.content, list):
-            tool_use_blocks = [b for b in msg.content if b.type == "tool_use"]
-            num_tool_uses = len(tool_use_blocks)
-
-            if num_tool_uses == 0:
-                # No tool_use blocks, keep message as-is
-                cleaned_messages.append(msg)
-                i += 1
-                continue
-
-            # Look ahead to check if we have all required tool_results
-            j = i + 1
-            found_tool_results = 0
-            valid_sequence = True
-
-            while j < len(anthropic_messages) and found_tool_results < num_tool_uses:
-                next_msg = anthropic_messages[j]
-
-                # Check if next message is a user message with tool_result blocks
-                if next_msg.role == "user" and isinstance(next_msg.content, list):
-                    tool_result_blocks = [b for b in next_msg.content if b.type == "tool_result"]
-                    if tool_result_blocks:
-                        # Count the number of tool_result blocks, not messages
-                        found_tool_results += len(tool_result_blocks)
-                        j += 1
-                    else:
-                        # User message without tool_result - might be a new user message
-                        valid_sequence = False
-                        break
-                elif next_msg.role == "user":
-                    # User message with text content - break the sequence
-                    valid_sequence = False
-                    break
-                else:
-                    # Non-user message - break the sequence
-                    valid_sequence = False
-                    break
-
-            # If we found all tool_results consecutively, keep the sequence
-            if valid_sequence and found_tool_results == num_tool_uses:
-                cleaned_messages.append(msg)
-                # Add all the tool_result messages
-                for k in range(i + 1, j):
-                    cleaned_messages.append(anthropic_messages[k])
-                i = j
-            else:
-                # Invalid sequence: remove tool_use blocks from assistant message
-                # and keep only text content
-                from models.anthropic_types import AnthropicContentBlock
-
-                text_blocks = [b for b in msg.content if b.type == "text"]
-                if text_blocks:
-                    # Convert to text-only message
-                    text_content = "\n".join([b.text or "" for b in text_blocks])
-                    cleaned_messages.append(
-                        AnthropicMessage(role=msg.role, content=text_content)
-                    )
-                # Skip orphaned tool_result messages
-                i += 1
-                while i < len(anthropic_messages):
-                    next_msg = anthropic_messages[i]
-                    if next_msg.role == "user" and isinstance(next_msg.content, list):
-                        tool_result_blocks = [b for b in next_msg.content if b.type == "tool_result"]
-                        if tool_result_blocks:
-                            # This is an orphaned tool_result, skip it
-                            i += 1
-                            continue
-                    break
-        else:
-            # Not an assistant message with tool_use, keep as-is
-            cleaned_messages.append(msg)
-            i += 1
-
-    return cleaned_messages
+# NOTE: This function has been deprecated in favor of unified validation in core/llm.py
+# The weight-based algorithm in _validate_tool_call_sequences() handles all cases more robustly
+# def validate_and_fix_anthropic_message_sequence(
+#     anthropic_messages: List[AnthropicMessage]
+# ) -> List[AnthropicMessage]:
+#     """
+#     Validate and fix incomplete tool_use sequences in Anthropic message history.
+#
+#     When an assistant message contains tool_use blocks, it must be immediately
+#     followed by user messages containing tool_result blocks for each tool_use_id.
+#     No other assistant messages should appear in between.
+#
+#     This function detects violations and removes incomplete tool_use blocks
+#     and their orphaned tool_results.
+#
+#     Args:
+#         anthropic_messages: List of AnthropicMessage objects to validate
+#
+#     Returns:
+#         Cleaned list of AnthropicMessage objects with valid tool_use sequences
+#     """
+#     cleaned_messages = []
+#     i = 0
+#
+#     while i < len(anthropic_messages):
+#         msg = anthropic_messages[i]
+#
+#         # Check if this is an assistant message with tool_use blocks
+#         if msg.role == "assistant" and isinstance(msg.content, list):
+#             tool_use_blocks = [b for b in msg.content if b.type == "tool_use"]
+#             num_tool_uses = len(tool_use_blocks)
+#
+#             if num_tool_uses == 0:
+#                 # No tool_use blocks, keep message as-is
+#                 cleaned_messages.append(msg)
+#                 i += 1
+#                 continue
+#
+#             # Look ahead to check if we have all required tool_results
+#             j = i + 1
+#             found_tool_results = 0
+#             valid_sequence = True
+#
+#             while j < len(anthropic_messages) and found_tool_results < num_tool_uses:
+#                 next_msg = anthropic_messages[j]
+#
+#                 # Check if next message is a user message with tool_result blocks
+#                 if next_msg.role == "user" and isinstance(next_msg.content, list):
+#                     tool_result_blocks = [b for b in next_msg.content if b.type == "tool_result"]
+#                     if tool_result_blocks:
+#                         # Count the number of tool_result blocks, not messages
+#                         found_tool_results += len(tool_result_blocks)
+#                         j += 1
+#                     else:
+#                         # User message without tool_result - might be a new user message
+#                         valid_sequence = False
+#                         break
+#                 elif next_msg.role == "user":
+#                     # User message with text content - break the sequence
+#                     valid_sequence = False
+#                     break
+#                 else:
+#                     # Non-user message - break the sequence
+#                     valid_sequence = False
+#                     break
+#
+#             # If we found all tool_results consecutively, keep the sequence
+#             if valid_sequence and found_tool_results == num_tool_uses:
+#                 cleaned_messages.append(msg)
+#                 # Add all the tool_result messages
+#                 for k in range(i + 1, j):
+#                     cleaned_messages.append(anthropic_messages[k])
+#                 i = j
+#             else:
+#                 # Invalid sequence: remove tool_use blocks from assistant message
+#                 # and keep only text content
+#                 from models.anthropic_types import AnthropicContentBlock
+#
+#                 text_blocks = [b for b in msg.content if b.type == "text"]
+#                 if text_blocks:
+#                     # Convert to text-only message
+#                     text_content = "\n".join([b.text or "" for b in text_blocks])
+#                     cleaned_messages.append(
+#                         AnthropicMessage(role=msg.role, content=text_content)
+#                     )
+#                 # Skip orphaned tool_result messages
+#                 i += 1
+#                 while i < len(anthropic_messages):
+#                     next_msg = anthropic_messages[i]
+#                     if next_msg.role == "user" and isinstance(next_msg.content, list):
+#                         tool_result_blocks = [b for b in next_msg.content if b.type == "tool_result"]
+#                         other_blocks = [b for b in next_msg.content if b.type != "tool_result"]
+#
+#                         if tool_result_blocks and other_blocks:
+#                             # Message has both tool_results AND other content (text/image)
+#                             # Remove orphaned tool_results but keep other content
+#                             cleaned_messages.append(
+#                                 AnthropicMessage(role=next_msg.role, content=other_blocks)
+#                             )
+#                             i += 1
+#                             continue
+#                         elif tool_result_blocks:
+#                             # Message only has tool_results, skip it entirely
+#                             i += 1
+#                             continue
+#                     break
+#         else:
+#             # Not an assistant message with tool_use, keep as-is
+#             cleaned_messages.append(msg)
+#             i += 1
+#
+#     return cleaned_messages
 
 
 def anthropic_to_langchain_messages(
@@ -327,9 +339,9 @@ def anthropic_to_langchain(request: AnthropicRequest) -> Dict[str, Any]:
             "max_tokens": 100
         }
     """
-    # Validate and fix message sequence before conversion
-    validated_messages = validate_and_fix_anthropic_message_sequence(request.messages)
-    lc_messages = anthropic_to_langchain_messages(validated_messages)
+    # NOTE: Validation moved to unified _validate_tool_call_sequences() in core/llm.py
+    # No need to pre-validate here - it will be done automatically in OCAChatModel
+    lc_messages = anthropic_to_langchain_messages(request.messages)
     openai_tools = anthropic_tools_to_openai_tools(request.tools)
 
     result = {
