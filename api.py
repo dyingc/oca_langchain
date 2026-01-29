@@ -119,6 +119,101 @@ def get_chat_model() -> OCAChatModel:
         )
     return model
 
+# NOTE: This function has been deprecated in favor of unified validation in core/llm.py
+# The weight-based algorithm in _validate_tool_call_sequences() handles all cases more robustly
+# def validate_and_fix_message_sequence(messages: List[ChatMessage]) -> List[ChatMessage]:
+#     """
+#     Validate and fix incomplete tool_call sequences in the message history.
+#
+#     OpenAI API requires that when an assistant message contains tool_calls,
+#     it must be immediately followed by tool response messages for each tool_call_id.
+#     No other messages (user/assistant/system) should appear in between.
+#
+#     This function detects violations and removes the incomplete tool_calls
+#     and their orphaned tool responses.
+#
+#     Args:
+#         messages: List of ChatMessage objects to validate
+#
+#     Returns:
+#         Cleaned list of ChatMessage objects with valid tool_call sequences
+#     """
+#     cleaned_messages = []
+#     i = 0
+#     skip_tool_messages = False  # Flag to skip orphaned tool messages
+#
+#     while i < len(messages):
+#         msg = messages[i]
+#
+#         # Skip orphaned tool messages if flag is set
+#         if skip_tool_messages and msg.role == "tool":
+#             logger.warning(
+#                 f"[MESSAGE VALIDATION] Skipping orphaned tool response at message {i}"
+#             )
+#             i += 1
+#             continue
+#
+#         # Check if this is an assistant message with tool_calls
+#         if msg.role == "assistant" and msg.tool_calls:
+#             # Extract all tool_call_ids
+#             tool_call_ids = [tc.get("id") for tc in msg.tool_calls if tc.get("id")]
+#             num_tool_calls = len(tool_call_ids)
+#
+#             if num_tool_calls == 0:
+#                 # No valid tool_call_ids, just add the message without tool_calls
+#                 cleaned_messages.append(ChatMessage(role=msg.role, content=msg.content, tool_calls=None))
+#                 i += 1
+#                 continue
+#
+#             # Look ahead to check if we have all required tool responses
+#             j = i + 1
+#             found_tool_responses = 0
+#             valid_sequence = True
+#
+#             while j < len(messages) and found_tool_responses < num_tool_calls:
+#                 next_msg = messages[j]
+#
+#                 if next_msg.role == "tool" and next_msg.tool_call_id in tool_call_ids:
+#                     found_tool_responses += 1
+#                     j += 1
+#                 elif next_msg.role == "tool":
+#                     # Tool response for a different tool_call_id - still count it
+#                     found_tool_responses += 1
+#                     j += 1
+#                 else:
+#                     # Found a non-tool message before collecting all tool responses
+#                     valid_sequence = False
+#                     break
+#
+#             # If we found all tool responses consecutively, keep the sequence
+#             if valid_sequence and found_tool_responses == num_tool_calls:
+#                 cleaned_messages.append(msg)
+#                 # Add all the tool response messages
+#                 for k in range(i + 1, j):
+#                     cleaned_messages.append(messages[k])
+#                 i = j
+#                 skip_tool_messages = False  # Reset flag
+#             else:
+#                 # Invalid sequence: remove tool_calls from assistant message
+#                 # and mark for skipping orphaned tool responses
+#                 logger.warning(
+#                     f"[MESSAGE VALIDATION] Incomplete tool_calls detected at message {i}. "
+#                     f"Expected {num_tool_calls} tool responses, but found non-tool message interrupting. "
+#                     f"Removing tool_calls from assistant message."
+#                 )
+#                 cleaned_messages.append(ChatMessage(role=msg.role, content=msg.content, tool_calls=None))
+#                 i += 1
+#                 skip_tool_messages = True  # Set flag to skip subsequent tool messages
+#                 continue
+#         else:
+#             # Not an assistant message with tool_calls, keep as-is
+#             cleaned_messages.append(msg)
+#             i += 1
+#             # Note: Don't reset skip_tool_messages here - it will be reset naturally
+#             # when we skip all orphaned tool messages and encounter the next assistant/user message
+#
+#     return cleaned_messages
+
 def convert_to_langchain_messages(messages: List[ChatMessage]) -> List[BaseMessage]:
     """
     Convert API ChatMessage list to LangChain BaseMessage list, preserving
@@ -280,6 +375,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
     chat_model.model = request.model
     chat_model.temperature = request.temperature
 
+    # NOTE: Validation moved to unified _validate_tool_call_sequences() in core/llm.py
+    # No need to pre-validate here - it will be done automatically in _stream()/_astream()
     lc_messages = convert_to_langchain_messages(request.messages)
 
     # --- Streaming response ---
