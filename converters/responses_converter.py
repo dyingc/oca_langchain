@@ -601,11 +601,13 @@ def create_response_error(
 def create_response_created_event(
     response_id: str,
     model: str,
-    previous_response_id: Optional[str] = None
+    previous_response_id: Optional[str] = None,
+    sequence_number: int = 0
 ) -> Dict[str, Any]:
     """Create a response.created event."""
     return {
         "type": "response.created",
+        "sequence_number": sequence_number,
         "response": {
             "id": response_id,
             "object": "response",
@@ -617,10 +619,16 @@ def create_response_created_event(
     }
 
 
+def _generate_event_id() -> str:
+    """Generate a unique event ID."""
+    return f"event_{uuid.uuid4().hex[:24]}"
+
+
 def create_output_item_added_event(
     output_index: int,
     item_type: str,
-    item_id: str
+    item_id: str,
+    sequence_number: int = 0
 ) -> Dict[str, Any]:
     """Create a response.output_item.added event."""
     item = {
@@ -641,6 +649,7 @@ def create_output_item_added_event(
     return {
         "type": "response.output_item.added",
         "output_index": output_index,
+        "sequence_number": sequence_number,
         "item": item
     }
 
@@ -648,39 +657,73 @@ def create_output_item_added_event(
 def create_output_text_delta_event(
     output_index: int,
     content_index: int,
-    delta: str
+    delta: str,
+    item_id: Optional[str] = None,
+    sequence_number: int = 0
 ) -> Dict[str, Any]:
-    """Create a response.output_text.delta event."""
-    return {
+    """Create a response.output_text.delta event.
+
+    Args:
+        output_index: Index of the output item
+        content_index: Index of the content part
+        delta: The text delta
+        item_id: ID of the output item (required for OpenAI compatibility)
+        sequence_number: Sequential number for ordering events
+    """
+    event = {
         "type": "response.output_text.delta",
         "output_index": output_index,
         "content_index": content_index,
-        "delta": delta
+        "delta": delta,
+        "sequence_number": sequence_number
     }
+
+    if item_id:
+        event["item_id"] = item_id
+
+    return event
 
 
 def create_function_call_arguments_delta_event(
     output_index: int,
     call_id: str,
-    delta: str
+    delta: str,
+    item_id: Optional[str] = None,
+    sequence_number: int = 0
 ) -> Dict[str, Any]:
-    """Create a response.function_call_arguments.delta event."""
-    return {
+    """Create a response.function_call_arguments.delta event.
+
+    Args:
+        output_index: Index of the output item
+        call_id: The call ID
+        delta: The arguments delta
+        item_id: ID of the output item (required for OpenAI compatibility)
+        sequence_number: Sequential number for ordering events
+    """
+    event = {
         "type": "response.function_call_arguments.delta",
         "output_index": output_index,
         "call_id": call_id,
-        "delta": delta
+        "delta": delta,
+        "sequence_number": sequence_number
     }
+
+    if item_id:
+        event["item_id"] = item_id
+
+    return event
 
 
 def create_output_item_done_event(
     output_index: int,
-    item: Dict[str, Any]
+    item: Dict[str, Any],
+    sequence_number: int = 0
 ) -> Dict[str, Any]:
     """Create a response.output_item.done event."""
     return {
         "type": "response.output_item.done",
         "output_index": output_index,
+        "sequence_number": sequence_number,
         "item": item
     }
 
@@ -690,11 +733,13 @@ def create_response_completed_event(
     model: str,
     output: List[Dict[str, Any]],
     usage: Dict[str, int],
-    previous_response_id: Optional[str] = None
+    previous_response_id: Optional[str] = None,
+    sequence_number: int = 0
 ) -> Dict[str, Any]:
     """Create a response.completed event."""
     return {
         "type": "response.completed",
+        "sequence_number": sequence_number,
         "response": {
             "id": response_id,
             "object": "response",

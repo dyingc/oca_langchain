@@ -199,10 +199,13 @@ async def response_stream_generator(
         )
 
         # Send response.created event
+        sequence_number = 0  # Global sequence counter for events
+        sequence_number += 1
         created_event = create_response_created_event(
             response_id=response_id,
             model=model,
-            previous_response_id=previous_response_id
+            previous_response_id=previous_response_id,
+            sequence_number=sequence_number
         )
         yield format_stream_event(created_event)
 
@@ -224,10 +227,12 @@ async def response_stream_generator(
         })
 
         # Send output_item.added event for message
+        sequence_number += 1
         added_event = create_output_item_added_event(
             output_index=0,
             item_type="message",
-            item_id=message_item_id
+            item_id=message_item_id,
+            sequence_number=sequence_number
         )
         yield format_stream_event(added_event)
 
@@ -247,11 +252,14 @@ async def response_stream_generator(
             if content_delta:
                 full_text_content += content_delta
 
-                # Add text delta event
+                # Add text delta event with item_id and sequence_number
+                sequence_number += 1
                 delta_event = create_output_text_delta_event(
                     output_index=0,
                     content_index=0,
-                    delta=content_delta
+                    delta=content_delta,
+                    item_id=message_item_id,
+                    sequence_number=sequence_number
                 )
                 yield format_stream_event(delta_event)
 
@@ -271,9 +279,11 @@ async def response_stream_generator(
                     output_items[0]["status"] = "completed"
 
                     # Send output_item.done for message
+                    sequence_number += 1
                     done_event = create_output_item_done_event(
                         output_index=0,
-                        item=output_items[0]
+                        item=output_items[0],
+                        sequence_number=sequence_number
                     )
                     yield format_stream_event(done_event)
 
@@ -309,10 +319,12 @@ async def response_stream_generator(
                         })
 
                         # Send output_item.added event
+                        sequence_number += 1
                         added_event = create_output_item_added_event(
                             output_index=len(output_items) - 1,
                             item_type="function_call",
-                            item_id=fc_item_id
+                            item_id=fc_item_id,
+                            sequence_number=sequence_number
                         )
                         yield format_stream_event(added_event)
 
@@ -327,10 +339,13 @@ async def response_stream_generator(
                     if tc_arguments:
                         state["arguments"] += tc_arguments
 
+                        sequence_number += 1
                         delta_event = create_function_call_arguments_delta_event(
                             output_index=state["output_index"],
                             call_id=state["call_id"],
-                            delta=tc_arguments
+                            delta=tc_arguments,
+                            item_id=state["item_id"],
+                            sequence_number=sequence_number
                         )
                         yield format_stream_event(delta_event)
 
@@ -345,9 +360,11 @@ async def response_stream_generator(
         output_items[0]["status"] = "completed"
 
         # Send output_item.done for message
+        sequence_number += 1
         done_event = create_output_item_done_event(
             output_index=0,
-            item=output_items[0]
+            item=output_items[0],
+            sequence_number=sequence_number
         )
         yield format_stream_event(done_event)
 
@@ -356,9 +373,11 @@ async def response_stream_generator(
             output_items[state["output_index"]]["arguments"] = state["arguments"]
             output_items[state["output_index"]]["status"] = "completed"
 
+            sequence_number += 1
             done_event = create_output_item_done_event(
                 output_index=state["output_index"],
-                item=output_items[state["output_index"]]
+                item=output_items[state["output_index"]],
+                sequence_number=sequence_number
             )
             yield format_stream_event(done_event)
 
@@ -386,8 +405,13 @@ async def response_stream_generator(
             model=model,
             output=clean_output,
             usage=usage,
-            previous_response_id=previous_response_id
+            previous_response_id=previous_response_id,
+            sequence_number=sequence_number + 1
         )
+
+        # Debug: Log the final output structure
+        logger.info(f"[RESPONSE API] Completed event output: {json.dumps(clean_output, ensure_ascii=False)[:1000]}")
+
         yield format_stream_event(completed_event)
 
         # Store the response (for retrieval via GET /v1/responses/{id})
