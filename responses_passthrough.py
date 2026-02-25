@@ -72,6 +72,36 @@ def resolve_passthrough_model(incoming_model: Optional[str]) -> str:
     return llm_model_name or ""
 
 
+# Valid reasoning effort values
+VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "minimal", "none"}
+
+
+def resolve_reasoning_effort(incoming_effort: Optional[str]) -> Optional[str]:
+    """
+    Resolve the reasoning effort for passthrough requests.
+
+    Logic:
+    1. If LLM_REASONING_STRENGTH is defined in .env and is a valid value, use it
+    2. Otherwise, keep the incoming effort as-is
+
+    Valid values: low, medium, high, xhigh, minimal, none
+
+    Args:
+        incoming_effort: The reasoning effort from the incoming request
+
+    Returns:
+        The resolved reasoning effort
+    """
+    llm_reasoning_strength = os.getenv("LLM_REASONING_STRENGTH", "").strip().lower()
+
+    if llm_reasoning_strength and llm_reasoning_strength in VALID_REASONING_EFFORTS:
+        logger.info(f"[PASSTHROUGH] Using configured LLM_REASONING_STRENGTH: {llm_reasoning_strength}")
+        return llm_reasoning_strength
+
+    # Return incoming effort unchanged
+    return incoming_effort
+
+
 def _get_token_manager() -> OCAOauth2TokenManager:
     """Get the token manager from the application context."""
     from api import lifespan_objects
@@ -339,6 +369,14 @@ async def create_response_passthrough(
 
     if original_model != resolved_model:
         logger.info(f"[PASSTHROUGH] Model resolved: {original_model} -> {resolved_model}")
+
+    # Resolve reasoning effort if present
+    if "reasoning" in modified_body and isinstance(modified_body["reasoning"], dict):
+        original_effort = modified_body["reasoning"].get("effort")
+        resolved_effort = resolve_reasoning_effort(original_effort)
+        if resolved_effort != original_effort:
+            modified_body["reasoning"]["effort"] = resolved_effort
+            logger.info(f"[PASSTHROUGH] Reasoning effort resolved: {original_effort} -> {resolved_effort}")
 
     is_streaming = modified_body.get("stream", False)
 
