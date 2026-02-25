@@ -514,33 +514,72 @@ async def anthropic_create_message(
 # --- OpenAI Response API Endpoints ---
 
 from responses_api import create_response, get_response, delete_response
+from responses_passthrough import (
+    is_passthrough_enabled,
+    create_response_passthrough
+)
 from models.responses_types import ResponseRequest
+
 
 @app.post("/v1/responses")
 async def responses_create(
-    request: ResponseRequest,
-    raw_request: Request
+    request: Request
 ):
     """
     OpenAI Response API /v1/responses endpoint.
 
-    Provides compatibility with OpenAI's Response API, supporting both
-    non-streaming and streaming responses. This endpoint allows clients
-    using the Response API format to communicate with our OCA backend.
+    If LLM_RESPONSES_API_URL is configured, requests are passed through directly
+    to the backend LLM that natively supports the Response API format.
 
-    The endpoint handles:
-    - Input format conversion (Response API ↔ LangChain)
-    - Stateful conversations via previous_response_id
-    - Tool calls (Response API format)
-    - Streaming responses (Response API SSE format)
+    Otherwise, provides compatibility by converting between Response API format
+    and LangChain messages.
+
+    Supports both non-streaming and streaming responses.
 
     Args:
-        request: ResponseRequest with Response API formatted input
+        request: FastAPI Request object (raw request for passthrough flexibility)
 
     Returns:
         Response (non-streaming) or StreamingResponse (streaming)
     """
-    return await create_response(request)
+    # Get the raw request body
+    body_bytes = await request.body()
+    try:
+        request_body = json.loads(body_bytes)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid JSON in request body"
+                }
+            }
+        )
+
+    # Check if passthrough mode is enabled
+    if is_passthrough_enabled():
+        logger.info("[RESPONSES API] Using passthrough mode (LLM_RESPONSES_API_URL configured)")
+        return await create_response_passthrough(request_body)
+
+    # Fall back to the conversion-based approach
+    # Parse the request into our Pydantic model
+    try:
+        response_request = ResponseRequest(**request_body)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": str(e)
+                }
+            }
+        )
+
+    return await create_response(response_request)
 
 
 @app.get("/v1/responses/{response_id}")
