@@ -39,6 +39,39 @@ def is_passthrough_enabled() -> bool:
     return bool(_get_responses_api_url())
 
 
+def resolve_passthrough_model(incoming_model: Optional[str]) -> str:
+    """
+    Resolve the model name for passthrough requests.
+
+    Logic:
+    1. If LLM_MODEL_NAME is defined in .env and starts with "oca/", use it
+    2. Otherwise, prefix "oca/" to the incoming model name
+
+    Args:
+        incoming_model: The model name from the incoming request (e.g., "gpt-5.1-codex-mini")
+
+    Returns:
+        The resolved model name (e.g., "oca/gpt-5.1-codex-mini" or the configured LLM_MODEL_NAME)
+    """
+    # Check if LLM_MODEL_NAME is configured and has oca/ prefix
+    llm_model_name = os.getenv("LLM_MODEL_NAME", "").strip()
+    if llm_model_name and llm_model_name.lower().startswith("oca/"):
+        logger.info(f"[PASSTHROUGH] Using configured LLM_MODEL_NAME: {llm_model_name}")
+        return llm_model_name
+
+    # Otherwise, prefix oca/ to the incoming model
+    if incoming_model:
+        # If already has oca/ prefix, use as-is
+        if incoming_model.strip().lower().startswith("oca/"):
+            return incoming_model.strip()
+        resolved = f"oca/{incoming_model.strip()}"
+        logger.info(f"[PASSTHROUGH] Prefixed model name: {incoming_model} -> {resolved}")
+        return resolved
+
+    # Fallback to LLM_MODEL_NAME even without oca/ prefix, or empty string
+    return llm_model_name or ""
+
+
 def _get_token_manager() -> OCAOauth2TokenManager:
     """Get the token manager from the application context."""
     from api import lifespan_objects
@@ -291,16 +324,28 @@ async def create_response_passthrough(
         StreamingResponse (streaming) or dict (non-streaming)
     """
     import uuid
+    import copy
 
     # Generate a response ID for logging/tracking
     response_id = f"resp_{uuid.uuid4().hex[:24]}"
 
-    is_streaming = request_body.get("stream", False)
+    # Resolve the model name before forwarding
+    original_model = request_body.get("model", "")
+    resolved_model = resolve_passthrough_model(original_model)
+
+    # Create a copy of the request body with resolved model
+    modified_body = copy.deepcopy(request_body)
+    modified_body["model"] = resolved_model
+
+    if original_model != resolved_model:
+        logger.info(f"[PASSTHROUGH] Model resolved: {original_model} -> {resolved_model}")
+
+    is_streaming = modified_body.get("stream", False)
 
     if is_streaming:
         return StreamingResponse(
             passthrough_stream_generator(
-                request_body=request_body,
+                request_body=modified_body,
                 headers={},  # We'll use our own auth
                 response_id=response_id
             ),
@@ -308,7 +353,7 @@ async def create_response_passthrough(
         )
     else:
         return await passthrough_non_streaming(
-            request_body=request_body,
+            request_body=modified_body,
             headers={},
             response_id=response_id
         )
