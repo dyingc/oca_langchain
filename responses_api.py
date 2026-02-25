@@ -18,6 +18,7 @@ import os
 from typing import Optional, Dict, Any
 from fastapi import HTTPException, Header
 from fastapi.responses import StreamingResponse
+from dotenv import load_dotenv
 
 from langchain_core.messages import AIMessage
 
@@ -50,8 +51,13 @@ logger = get_logger(__name__)
 
 
 # --- Model Resolution ---
-# Default model from environment (fallback when incoming model doesn't have oca/ prefix)
-_DEFAULT_MODEL = os.getenv("LLM_MODEL_NAME", "").strip()
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+
+def _get_default_model() -> str:
+    """Get LLM_MODEL_NAME from .env with runtime reload."""
+    load_dotenv(_ENV_PATH, override=True)
+    return os.getenv("LLM_MODEL_NAME", "").strip()
 
 
 def resolve_model_name(incoming_model: str) -> str:
@@ -71,10 +77,12 @@ def resolve_model_name(incoming_model: str) -> str:
         # Use incoming model if it already has oca/ prefix
         return incoming_model.strip()
 
+    default_model = _get_default_model()
+
     # Fall back to default model from env
-    if _DEFAULT_MODEL:
-        logger.info(f"[MODEL RESOLUTION] Incoming model '{incoming_model}' doesn't have oca/ prefix, using default: {_DEFAULT_MODEL}")
-        return _DEFAULT_MODEL
+    if default_model:
+        logger.info(f"[MODEL RESOLUTION] Incoming model '{incoming_model}' doesn't have oca/ prefix, using default: {default_model}")
+        return default_model
 
     # No default set, use incoming as-is (will likely fail validation)
     return incoming_model

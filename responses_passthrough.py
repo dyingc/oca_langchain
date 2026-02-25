@@ -15,12 +15,12 @@ from fastapi import HTTPException, Header
 from fastapi.responses import StreamingResponse
 import httpx
 
-from dotenv import load_dotenv, get_key
+from dotenv import load_dotenv
 from core.logger import get_logger
 from core.oauth2_token_manager import OCAOauth2TokenManager
 
 # Path to .env file for dynamic reloading
-_ENV_PATH = ".env"
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
 logger = get_logger(__name__)
 
@@ -59,6 +59,7 @@ def resolve_passthrough_model(incoming_model: Optional[str]) -> str:
     Returns:
         The resolved model name (e.g., "oca/gpt-5.1-codex-mini" or the configured LLM_MODEL_NAME)
     """
+    _reload_env()
     # Check if LLM_MODEL_NAME is configured and has oca/ prefix
     llm_model_name = os.getenv("LLM_MODEL_NAME", "").strip()
     if llm_model_name and llm_model_name.lower().startswith("oca/"):
