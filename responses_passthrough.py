@@ -102,6 +102,27 @@ def resolve_reasoning_effort(incoming_effort: Optional[str]) -> Optional[str]:
     return incoming_effort
 
 
+def resolve_null_reasoning() -> Optional[Dict[str, str]]:
+    """
+    Resolve reasoning when it's null in the incoming request.
+
+    If LLM_NON_REASONING_STRENGTH is defined in .env and is a valid value,
+    return a reasoning object with that effort and summary="auto".
+
+    Valid values: low, medium, high, xhigh, minimal, none
+
+    Returns:
+        A dict like {"effort": "<value>", "summary": "auto"} or None
+    """
+    llm_non_reasoning_strength = os.getenv("LLM_NON_REASONING_STRENGTH", "").strip().lower()
+
+    if llm_non_reasoning_strength and llm_non_reasoning_strength in VALID_REASONING_EFFORTS:
+        logger.info(f"[PASSTHROUGH] Using LLM_NON_REASONING_STRENGTH for null reasoning: {llm_non_reasoning_strength}")
+        return {"effort": llm_non_reasoning_strength, "summary": "auto"}
+
+    return None
+
+
 def _get_token_manager() -> OCAOauth2TokenManager:
     """Get the token manager from the application context."""
     from api import lifespan_objects
@@ -370,13 +391,21 @@ async def create_response_passthrough(
     if original_model != resolved_model:
         logger.info(f"[PASSTHROUGH] Model resolved: {original_model} -> {resolved_model}")
 
-    # Resolve reasoning effort if present
-    if "reasoning" in modified_body and isinstance(modified_body["reasoning"], dict):
-        original_effort = modified_body["reasoning"].get("effort")
-        resolved_effort = resolve_reasoning_effort(original_effort)
-        if resolved_effort != original_effort:
-            modified_body["reasoning"]["effort"] = resolved_effort
-            logger.info(f"[PASSTHROUGH] Reasoning effort resolved: {original_effort} -> {resolved_effort}")
+    # Resolve reasoning effort
+    if "reasoning" in modified_body:
+        if modified_body["reasoning"] is None:
+            # Handle null reasoning - try to fill with LLM_NON_REASONING_STRENGTH
+            resolved_reasoning = resolve_null_reasoning()
+            if resolved_reasoning:
+                modified_body["reasoning"] = resolved_reasoning
+                logger.info(f"[PASSTHROUGH] Null reasoning replaced with: {resolved_reasoning}")
+        elif isinstance(modified_body["reasoning"], dict):
+            # Handle existing reasoning dict - override effort if configured
+            original_effort = modified_body["reasoning"].get("effort")
+            resolved_effort = resolve_reasoning_effort(original_effort)
+            if resolved_effort != original_effort:
+                modified_body["reasoning"]["effort"] = resolved_effort
+                logger.info(f"[PASSTHROUGH] Reasoning effort resolved: {original_effort} -> {resolved_effort}")
 
     is_streaming = modified_body.get("stream", False)
 
