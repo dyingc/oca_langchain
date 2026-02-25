@@ -269,6 +269,15 @@ class OCAOauth2TokenManager:
                 trust_env=False,
             ) as client:
                 async with client.stream(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, **kwargs) as response:
+                    if response.status_code >= 400:
+                        # Read error body before raising
+                        error_body = ""
+                        try:
+                            async for chunk in response.aiter_bytes():
+                                error_body += chunk.decode("utf-8", errors="replace")
+                            print(f"[ASYNC STREAM ERROR] Status {response.status_code}, URL: {url}, Body: {error_body}")
+                        except Exception as e:
+                            print(f"[ASYNC STREAM ERROR] Status {response.status_code}, URL: {url}, Failed to read body: {e}")
                     response.raise_for_status()
                     if on_open is not None:
                         try:

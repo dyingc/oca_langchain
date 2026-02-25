@@ -487,12 +487,10 @@ class OCAChatModel(BaseChatModel):
 
         headers = self._build_headers()
         payload = self._build_payload(validated_messages, stream=True, **kwargs)
-        # Logging request
+        # Logging request - write to debug file
         try:
-            if self.logger.isEnabledFor(logging.DEBUG):
-                self.logger.debug("[LLM REQUEST] headers=%s payload=%s", json.dumps(_redact_headers(headers), ensure_ascii=False), json.dumps(payload, ensure_ascii=False))
-            else:
-                self.logger.info("[LLM REQUEST] %s", json.dumps(payload, ensure_ascii=False))
+            with open("logs/debug_request.json", "w") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
         full_async_content = ""

@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 
@@ -105,6 +106,31 @@ async def lifespan(app: FastAPI):
 
 # --- FastAPI App Initialization ---
 app = FastAPI(lifespan=lifespan)
+
+# --- Validation Error Handler ---
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """
+    Log validation errors with the original request body for debugging.
+    """
+    body = await request.body()
+    try:
+        body_json = json.loads(body)
+    except:
+        body_json = body.decode("utf-8", errors="replace")
+
+    # Save to file for debugging
+    with open("logs/validation_error_request.json", "w") as f:
+        json.dump({
+            "url": str(request.url),
+            "method": request.method,
+            "body": body_json,
+            "errors": exc.errors()
+        }, f, ensure_ascii=False, indent=2)
+
+    logger.error(f"[VALIDATION ERROR] {exc.errors()}")
+    # Re-raise to return normal 422 response
+    raise exc
 
 # --- Helper Functions ---
 def get_chat_model() -> OCAChatModel:
@@ -483,6 +509,67 @@ async def anthropic_create_message(
         AnthropicResponse (non-streaming) or StreamingResponse (streaming)
     """
     return await create_message(request)
+
+
+# --- OpenAI Response API Endpoints ---
+
+from responses_api import create_response, get_response, delete_response
+from models.responses_types import ResponseRequest
+
+@app.post("/v1/responses")
+async def responses_create(
+    request: ResponseRequest,
+    raw_request: Request
+):
+    """
+    OpenAI Response API /v1/responses endpoint.
+
+    Provides compatibility with OpenAI's Response API, supporting both
+    non-streaming and streaming responses. This endpoint allows clients
+    using the Response API format to communicate with our OCA backend.
+
+    The endpoint handles:
+    - Input format conversion (Response API ↔ LangChain)
+    - Stateful conversations via previous_response_id
+    - Tool calls (Response API format)
+    - Streaming responses (Response API SSE format)
+
+    Args:
+        request: ResponseRequest with Response API formatted input
+
+    Returns:
+        Response (non-streaming) or StreamingResponse (streaming)
+    """
+    return await create_response(request)
+
+
+@app.get("/v1/responses/{response_id}")
+async def responses_get(response_id: str):
+    """
+    Retrieve a stored response by ID.
+
+    Args:
+        response_id: The ID of the response to retrieve
+
+    Returns:
+        Response object
+    """
+    return await get_response(response_id)
+
+
+@app.delete("/v1/responses/{response_id}")
+async def responses_delete(response_id: str):
+    """
+    Delete a stored response.
+
+    Args:
+        response_id: The ID of the response to delete
+
+    Returns:
+        ResponseDeleted confirmation
+    """
+    return await delete_response(response_id)
+
 
 if __name__ == "__main__":
     # For direct execution and testing, use uvicorn:

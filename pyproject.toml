@@ -26,3 +26,9 @@ include = ["ui", "core"]
 members = [
     "oca_langchain",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.2",
+]
