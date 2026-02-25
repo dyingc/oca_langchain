@@ -83,9 +83,6 @@ def resolve_model_name(incoming_model: str) -> str:
 # --- In-Memory Response Storage ---
 # For production, this should be replaced with a persistent store (Redis, DB, etc.)
 _response_store: Dict[str, Response] = {}
-# Store conversation history for stateful conversations
-# Key: response_id, Value: list of LangChain messages used
-_conversation_history: Dict[str, list] = {}
 
 
 def _get_chat_model():
@@ -109,20 +106,8 @@ def delete_stored_response(response_id: str) -> bool:
     """Delete a stored response. Returns True if deleted."""
     if response_id in _response_store:
         del _response_store[response_id]
-        if response_id in _conversation_history:
-            del _conversation_history[response_id]
         return True
     return False
-
-
-def store_conversation_history(response_id: str, messages: list) -> None:
-    """Store conversation history for a response."""
-    _conversation_history[response_id] = messages.copy()
-
-
-def get_conversation_history(response_id: str) -> Optional[list]:
-    """Get conversation history for a response."""
-    return _conversation_history.get(response_id)
 
 
 # --- Validation ---
@@ -405,7 +390,7 @@ async def response_stream_generator(
         )
         yield format_stream_event(completed_event)
 
-        # Store the response
+        # Store the response (for retrieval via GET /v1/responses/{id})
         response = Response(
             id=response_id,
             model=model,
@@ -414,7 +399,6 @@ async def response_stream_generator(
             previous_response_id=previous_response_id
         )
         store_response(response)
-        store_conversation_history(response_id, lc_messages)
 
     except Exception as e:
         logger.exception("Error in response_stream_generator")
@@ -514,22 +498,9 @@ async def create_response(
     lc_messages = lc_params["messages"]
     tools = lc_params["tools"]
 
-    # Handle previous_response_id for stateful conversations
-    if request.previous_response_id:
-        prev_messages = get_conversation_history(request.previous_response_id)
-        if prev_messages:
-            # Prepend previous conversation to current messages
-            # But keep system message at the top if present
-            system_messages = [m for m in lc_messages if hasattr(m, '__class__') and m.__class__.__name__ == 'SystemMessage']
-            other_messages = [m for m in lc_messages if hasattr(m, '__class__') and m.__class__.__name__ != 'SystemMessage']
-
-            # Build combined messages: system + prev_history + new messages
-            combined_messages = []
-            if system_messages:
-                combined_messages.extend(system_messages)
-            combined_messages.extend(prev_messages)
-            combined_messages.extend(other_messages)
-            lc_messages = combined_messages
+    # Note: previous_response_id is kept for response metadata only.
+    # We don't merge history - clients should manage their own conversation state
+    # by sending complete message history in each request's input field.
 
     # Handle streaming vs non-streaming
     if request.stream:
@@ -568,10 +539,9 @@ async def create_response(
                 previous_response_id=request.previous_response_id
             )
 
-            # Store if requested
+            # Store if requested (for retrieval via GET /v1/responses/{id})
             if request.store:
                 store_response(api_response)
-                store_conversation_history(response_id, lc_messages)
 
             logger.info(
                 f"[RESPONSE API] Completed response {response_id}, "
