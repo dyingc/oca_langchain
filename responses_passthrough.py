@@ -15,18 +15,24 @@ from fastapi import HTTPException, Header
 from fastapi.responses import StreamingResponse
 import httpx
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, get_key
 from core.logger import get_logger
 from core.oauth2_token_manager import OCAOauth2TokenManager
 
-# Load .env file
-load_dotenv()
+# Path to .env file for dynamic reloading
+_ENV_PATH = ".env"
 
 logger = get_logger(__name__)
 
 
+def _reload_env() -> None:
+    """Reload .env file to pick up runtime changes."""
+    load_dotenv(_ENV_PATH, override=True)
+
+
 def _get_responses_api_url() -> Optional[str]:
     """Get the Responses API URL from environment (dynamic lookup)."""
+    _reload_env()
     # Support both naming conventions (with or without 'S')
     url = os.getenv("LLM_RESPONSES_API_URL", "").strip()
     if not url:
@@ -92,6 +98,7 @@ def resolve_reasoning_effort(incoming_effort: Optional[str]) -> Optional[str]:
     Returns:
         The resolved reasoning effort
     """
+    _reload_env()
     llm_reasoning_strength = os.getenv("LLM_REASONING_STRENGTH", "").strip().lower()
 
     if llm_reasoning_strength and llm_reasoning_strength in VALID_REASONING_EFFORTS:
@@ -114,6 +121,7 @@ def resolve_null_reasoning() -> Optional[Dict[str, str]]:
     Returns:
         A dict like {"effort": "<value>", "summary": "auto"} or None
     """
+    _reload_env()
     llm_non_reasoning_strength = os.getenv("LLM_NON_REASONING_STRENGTH", "").strip().lower()
 
     if llm_non_reasoning_strength and llm_non_reasoning_strength in VALID_REASONING_EFFORTS:
