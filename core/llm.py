@@ -351,7 +351,12 @@ class OCAChatModel(BaseChatModel):
                 response.raise_for_status()
 
                 models_data = response.json().get("data", [])
-                self.available_models = [model.get("id") for model in models_data if model.get("id")]
+                # Support both old format ({"id": "oca/gpt-5.2"}) and new format
+                # ({"litellm_params": {"model": "oca/gpt-5.2"}})
+                for model in models_data:
+                    model_id = model.get("id") or model.get("litellm_params", {}).get("model")
+                    if model_id:
+                        self.available_models.append(model_id)
 
                 if not self.available_models:
                     if self._debug: print("Warning: The API returned an empty models list.")
