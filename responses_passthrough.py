@@ -15,28 +15,38 @@ from fastapi import HTTPException, Header
 from fastapi.responses import StreamingResponse
 import httpx
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from core.logger import get_logger
 from core.oauth2_token_manager import OCAOauth2TokenManager
 
-# Path to .env file for dynamic reloading
+# Path to .env file for dynamic lookup
 _ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
 logger = get_logger(__name__)
 
 
-def _reload_env() -> None:
-    """Reload .env file to pick up runtime changes."""
-    load_dotenv(_ENV_PATH, override=True)
+def _get_runtime_env_value(key: str, default: str = "") -> str:
+    """
+    Read env value with .env as source of truth when the file exists.
+
+    This avoids stale `os.environ` values for keys that were removed/commented
+    out from .env while the process is still running.
+    """
+    if os.path.exists(_ENV_PATH):
+        values = dotenv_values(_ENV_PATH)
+        value = values.get(key)
+        if value is None:
+            return default
+        return str(value).strip()
+    return os.getenv(key, default).strip()
 
 
 def _get_responses_api_url() -> Optional[str]:
     """Get the Responses API URL from environment (dynamic lookup)."""
-    _reload_env()
     # Support both naming conventions (with or without 'S')
-    url = os.getenv("LLM_RESPONSES_API_URL", "").strip()
+    url = _get_runtime_env_value("LLM_RESPONSES_API_URL", "")
     if not url:
-        url = os.getenv("LLM_RESPONSE_API_URL", "").strip()
+        url = _get_runtime_env_value("LLM_RESPONSE_API_URL", "")
     return url or None
 
 
@@ -50,8 +60,9 @@ def resolve_passthrough_model(incoming_model: Optional[str]) -> str:
     Resolve the model name for passthrough requests.
 
     Logic:
-    1. If LLM_MODEL_NAME is defined in .env and starts with "oca/", use it
-    2. Otherwise, prefix "oca/" to the incoming model name
+    1. If incoming model already starts with "oca/", use it as-is
+    2. Else if LLM_MODEL_NAME is defined in .env and starts with "oca/", use it
+    3. Otherwise, prefix "oca/" to the incoming model name
 
     Args:
         incoming_model: The model name from the incoming request (e.g., "gpt-5.1-codex-mini")
@@ -59,18 +70,19 @@ def resolve_passthrough_model(incoming_model: Optional[str]) -> str:
     Returns:
         The resolved model name (e.g., "oca/gpt-5.1-codex-mini" or the configured LLM_MODEL_NAME)
     """
-    _reload_env()
+    if incoming_model:
+        # If already has oca/ prefix, use as-is
+        if incoming_model.strip().lower().startswith("oca/"):
+            return incoming_model.strip()
+
     # Check if LLM_MODEL_NAME is configured and has oca/ prefix
-    llm_model_name = os.getenv("LLM_MODEL_NAME", "").strip()
+    llm_model_name = _get_runtime_env_value("LLM_MODEL_NAME", "")
     if llm_model_name and llm_model_name.lower().startswith("oca/"):
         logger.info(f"[PASSTHROUGH] Using configured LLM_MODEL_NAME: {llm_model_name}")
         return llm_model_name
 
     # Otherwise, prefix oca/ to the incoming model
     if incoming_model:
-        # If already has oca/ prefix, use as-is
-        if incoming_model.strip().lower().startswith("oca/"):
-            return incoming_model.strip()
         resolved = f"oca/{incoming_model.strip()}"
         logger.info(f"[PASSTHROUGH] Prefixed model name: {incoming_model} -> {resolved}")
         return resolved
@@ -99,8 +111,7 @@ def resolve_reasoning_effort(incoming_effort: Optional[str]) -> Optional[str]:
     Returns:
         The resolved reasoning effort
     """
-    _reload_env()
-    llm_reasoning_strength = os.getenv("LLM_REASONING_STRENGTH", "").strip().lower()
+    llm_reasoning_strength = _get_runtime_env_value("LLM_REASONING_STRENGTH", "").lower()
 
     if llm_reasoning_strength and llm_reasoning_strength in VALID_REASONING_EFFORTS:
         logger.info(f"[PASSTHROUGH] Using configured LLM_REASONING_STRENGTH: {llm_reasoning_strength}")
@@ -122,8 +133,7 @@ def resolve_null_reasoning() -> Optional[Dict[str, str]]:
     Returns:
         A dict like {"effort": "<value>", "summary": "auto"} or None
     """
-    _reload_env()
-    llm_non_reasoning_strength = os.getenv("LLM_NON_REASONING_STRENGTH", "").strip().lower()
+    llm_non_reasoning_strength = _get_runtime_env_value("LLM_NON_REASONING_STRENGTH", "").lower()
 
     if llm_non_reasoning_strength and llm_non_reasoning_strength in VALID_REASONING_EFFORTS:
         logger.info(f"[PASSTHROUGH] Using LLM_NON_REASONING_STRENGTH for null reasoning: {llm_non_reasoning_strength}")
@@ -189,9 +199,9 @@ async def passthrough_stream_generator(
         "Authorization": f"Bearer {access_token}",
     }
 
-    timeout = float(os.getenv("LLM_REQUEST_TIMEOUT", "180"))
-    ca_bundle = os.getenv("SSL_CERT_FILE") or os.getenv("REQUESTS_CA_BUNDLE")
-    disable_ssl = os.getenv("DISABLE_SSL_VERIFY", "false").lower() == "true"
+    timeout = float(_get_runtime_env_value("LLM_REQUEST_TIMEOUT", "180"))
+    ca_bundle = _get_runtime_env_value("SSL_CERT_FILE", "") or _get_runtime_env_value("REQUESTS_CA_BUNDLE", "")
+    disable_ssl = _get_runtime_env_value("DISABLE_SSL_VERIFY", "false").lower() == "true"
 
     logger.info(
         f"[PASSTHROUGH] Starting streaming request to {api_url}, "
@@ -306,9 +316,9 @@ async def passthrough_non_streaming(
         "Authorization": f"Bearer {access_token}",
     }
 
-    timeout = float(os.getenv("LLM_REQUEST_TIMEOUT", "180"))
-    ca_bundle = os.getenv("SSL_CERT_FILE") or os.getenv("REQUESTS_CA_BUNDLE")
-    disable_ssl = os.getenv("DISABLE_SSL_VERIFY", "false").lower() == "true"
+    timeout = float(_get_runtime_env_value("LLM_REQUEST_TIMEOUT", "180"))
+    ca_bundle = _get_runtime_env_value("SSL_CERT_FILE", "") or _get_runtime_env_value("REQUESTS_CA_BUNDLE", "")
+    disable_ssl = _get_runtime_env_value("DISABLE_SSL_VERIFY", "false").lower() == "true"
 
     logger.info(
         f"[PASSTHROUGH] Starting non-streaming request to {api_url}, "

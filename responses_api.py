@@ -18,7 +18,7 @@ import os
 from typing import Optional, Dict, Any
 from fastapi import HTTPException, Header
 from fastapi.responses import StreamingResponse
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 from langchain_core.messages import AIMessage
 
@@ -54,10 +54,25 @@ logger = get_logger(__name__)
 _ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
 
+def _get_runtime_env_value(key: str, default: str = "") -> str:
+    """
+    Read env value with .env as source of truth when the file exists.
+
+    This avoids stale values in `os.environ` when a key is removed/commented out
+    from .env during runtime.
+    """
+    if os.path.exists(_ENV_PATH):
+        values = dotenv_values(_ENV_PATH)
+        value = values.get(key)
+        if value is None:
+            return default
+        return str(value).strip()
+    return os.getenv(key, default).strip()
+
+
 def _get_default_model() -> str:
     """Get LLM_MODEL_NAME from .env with runtime reload."""
-    load_dotenv(_ENV_PATH, override=True)
-    return os.getenv("LLM_MODEL_NAME", "").strip()
+    return _get_runtime_env_value("LLM_MODEL_NAME", "")
 
 
 def resolve_model_name(incoming_model: str) -> str:
