@@ -20,6 +20,11 @@ from .logger import get_logger
 
 logger = get_logger(__name__)
 
+_LOG_MAX_STRING_CHARS = 1000
+_LOG_MAX_LIST_ITEMS = 8
+_LOG_MAX_DICT_ITEMS = 32
+_LOG_MAX_DEPTH = 6
+
 def _redact_headers(h: dict) -> dict:
     try:
         redacted = dict(h or {})
@@ -28,6 +33,57 @@ def _redact_headers(h: dict) -> dict:
         return redacted
     except Exception:
         return {"<headers>": "<unavailable>"}
+
+
+def _compact_for_log(value: Any, depth: int = 0) -> Any:
+    """
+    Build a compact log-safe object.
+
+    This keeps logs readable for large model outputs (especially tool call
+    arguments) by truncating long strings and limiting container sizes.
+    """
+    if depth >= _LOG_MAX_DEPTH:
+        return "<max-depth>"
+
+    if isinstance(value, str):
+        if len(value) <= _LOG_MAX_STRING_CHARS:
+            return value
+        trimmed = value[:_LOG_MAX_STRING_CHARS]
+        return f"{trimmed}...<truncated {len(value) - _LOG_MAX_STRING_CHARS} chars>"
+
+    if isinstance(value, list):
+        compact_items = [_compact_for_log(v, depth + 1) for v in value[:_LOG_MAX_LIST_ITEMS]]
+        if len(value) > _LOG_MAX_LIST_ITEMS:
+            compact_items.append(f"<{len(value) - _LOG_MAX_LIST_ITEMS} more items>")
+        return compact_items
+
+    if isinstance(value, tuple):
+        compact_items = [_compact_for_log(v, depth + 1) for v in value[:_LOG_MAX_LIST_ITEMS]]
+        if len(value) > _LOG_MAX_LIST_ITEMS:
+            compact_items.append(f"<{len(value) - _LOG_MAX_LIST_ITEMS} more items>")
+        return compact_items
+
+    if isinstance(value, dict):
+        compact_dict = {}
+        items = list(value.items())
+        for idx, (k, v) in enumerate(items):
+            if idx >= _LOG_MAX_DICT_ITEMS:
+                compact_dict["<truncated_keys>"] = len(items) - _LOG_MAX_DICT_ITEMS
+                break
+            compact_dict[k] = _compact_for_log(v, depth + 1)
+        return compact_dict
+
+    return value
+
+
+def _build_response_log_obj(content: str, tool_calls: Optional[List[dict]]) -> dict:
+    compact = _compact_for_log({
+        "content": content or "",
+        "tool_calls": tool_calls or [],
+    })
+    compact["content_chars"] = len(content or "")
+    compact["tool_calls_count"] = len(tool_calls or [])
+    return compact
 
 def _calculate_message_weight(msg: BaseMessage) -> int:
     """
@@ -433,10 +489,15 @@ class OCAChatModel(BaseChatModel):
         payload = self._build_payload(validated_messages, stream=True, **kwargs)
         # Logging request
         try:
+            compact_payload = _compact_for_log(payload)
             if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("[LLM REQUEST] headers=%s payload=%s", json.dumps(_redact_headers(headers), ensure_ascii=False), json.dumps(payload, ensure_ascii=False))
+                logger.debug(
+                    "[LLM REQUEST] headers=%s payload=%s",
+                    json.dumps(_redact_headers(headers), ensure_ascii=False),
+                    json.dumps(compact_payload, ensure_ascii=False),
+                )
             else:
-                logger.info("[LLM REQUEST] %s", json.dumps(payload, ensure_ascii=False))
+                logger.info("[LLM REQUEST] %s", json.dumps(compact_payload, ensure_ascii=False))
         except Exception:
             pass
         try:
@@ -583,10 +644,14 @@ class OCAChatModel(BaseChatModel):
                         b["function"]["arguments"] = str(b["function"]["arguments"])
                     final_tool_calls_async.append(b)
             try:
-                log_obj = {"content": full_async_content, "tool_calls": final_tool_calls_async or []}
+                log_obj = _build_response_log_obj(full_async_content, final_tool_calls_async)
                 if logger.isEnabledFor(logging.DEBUG):
                     if response_headers:
-                        logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(response_headers, ensure_ascii=False), json.dumps(log_obj, ensure_ascii=False))
+                        logger.debug(
+                            "[LLM RESPONSE] headers=%s body=%s",
+                            json.dumps(_compact_for_log(response_headers), ensure_ascii=False),
+                            json.dumps(log_obj, ensure_ascii=False),
+                        )
                     else:
                         logger.debug("[LLM RESPONSE] body=%s", json.dumps(log_obj, ensure_ascii=False))
                 else:
@@ -656,10 +721,14 @@ class OCAChatModel(BaseChatModel):
         # Log final response
         try:
             headers_to_log = getattr(self, "_last_response_headers", None)
-            log_obj = {"content": full_response_content, "tool_calls": final_tool_calls or []}
+            log_obj = _build_response_log_obj(full_response_content, final_tool_calls)
             if logger.isEnabledFor(logging.DEBUG):
                 if headers_to_log is not None:
-                    logger.debug("[LLM RESPONSE] headers=%s body=%s", json.dumps(headers_to_log, ensure_ascii=False), json.dumps(log_obj, ensure_ascii=False))
+                    logger.debug(
+                        "[LLM RESPONSE] headers=%s body=%s",
+                        json.dumps(_compact_for_log(headers_to_log), ensure_ascii=False),
+                        json.dumps(log_obj, ensure_ascii=False),
+                    )
                 else:
                     logger.debug("[LLM RESPONSE] body=%s", json.dumps(log_obj, ensure_ascii=False))
             else:
