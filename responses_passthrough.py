@@ -447,8 +447,15 @@ async def create_response_passthrough(
     modified_body = copy.deepcopy(request_body)
     modified_body["model"] = resolved_model
 
-    if original_model != resolved_model:
-        logger.info(f"[PASSTHROUGH] Model resolved: {original_model} -> {resolved_model}")
+    # Extract original reasoning effort for logging
+    original_reasoning = request_body.get("reasoning")
+    original_effort = "none"
+    if isinstance(original_reasoning, dict):
+        original_effort = original_reasoning.get("effort", "none")
+        if original_effort:
+            original_effort = original_effort.capitalize()
+        else:
+            original_effort = "none"
 
     # Resolve reasoning effort
     reasoning_value = modified_body.get("reasoning")
@@ -460,14 +467,28 @@ async def create_response_passthrough(
             logger.info(f"[PASSTHROUGH] Null/missing reasoning replaced with: {resolved_reasoning}")
     elif isinstance(reasoning_value, dict):
         # Handle existing reasoning dict - override effort if configured
-        original_effort = reasoning_value.get("effort")
-        resolved_effort = resolve_reasoning_effort(original_effort)
-        if resolved_effort != original_effort:
+        incoming_effort = reasoning_value.get("effort")
+        resolved_effort = resolve_reasoning_effort(incoming_effort)
+        if resolved_effort != incoming_effort:
             modified_body["reasoning"]["effort"] = resolved_effort
-            logger.info(f"[PASSTHROUGH] Reasoning effort resolved: {original_effort} -> {resolved_effort}")
+            logger.info(f"[PASSTHROUGH] Reasoning effort resolved: {incoming_effort} -> {resolved_effort}")
 
     # Enforce minimum reasoning effort for pro models
     enforce_pro_model_min_reasoning(modified_body)
+
+    # Extract final reasoning effort for logging
+    final_reasoning = modified_body.get("reasoning")
+    final_effort = "none"
+    if isinstance(final_reasoning, dict):
+        final_effort = final_reasoning.get("effort", "none")
+        if final_effort:
+            final_effort = final_effort.capitalize()
+        else:
+            final_effort = "none"
+
+    # Log complete model resolution (only if model was resolved)
+    if original_model != resolved_model:
+        logger.info(f"[PASSTHROUGH] Model resolved: {original_model} ({original_effort}) -> {resolved_model} ({final_effort})")
 
     is_streaming = modified_body.get("stream", False)
 
