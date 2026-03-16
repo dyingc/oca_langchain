@@ -153,6 +153,43 @@ python core/llm.py
 - 响应状态码、错误信息
 - Tool Calls 和异常堆栈
 
+### 本地 Responses API 调用约定
+
+当使用本地 OpenAI 兼容端点 `http://127.0.0.1:8450` 时,以下经验已经验证:
+
+- `oca/gpt-5.4-pro` 不应使用 `/v1/chat/completions`,应使用 `/v1/responses`
+- `oca/gpt-5.4` 也优先使用 `/v1/responses` 做对照和调试
+- `responses` 请求体不要用 `messages`,要用 `input`
+- `input` 应该是 message object 数组,每项包含 `role` 和 `content`
+- `content` 应该是 content item 数组,文本项使用 `{"type":"input_text","text":"..."}`
+- `max_output_tokens` 至少为 `16`,低于该值可能被后端拒绝
+- `oca/gpt-5.4-pro` 应显式带上 `reasoning: {"effort": "high"}`
+- 如需保留推理密文,可带 `include: ["reasoning.encrypted_content"]`
+
+推荐最小 payload:
+
+```json
+{
+  "model": "oca/gpt-5.4-pro",
+  "include": ["reasoning.encrypted_content"],
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "reply with exactly: ok"
+        }
+      ]
+    }
+  ],
+  "reasoning": {
+    "effort": "high"
+  },
+  "max_output_tokens": 16
+}
+```
+
 ### 测试和调试
 
 目前项目没有正式的单元测试。主要测试方式:
