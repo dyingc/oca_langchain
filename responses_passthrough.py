@@ -94,6 +94,11 @@ def resolve_passthrough_model(incoming_model: Optional[str]) -> str:
 # Valid reasoning effort values
 VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "minimal", "none"}
 
+# Minimum effort for pro models - efforts below "medium" get promoted
+PRO_MODEL_MIN_EFFORT = "medium"
+# Effort levels ordered from weakest to strongest
+_EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh"]
+
 
 def resolve_reasoning_effort(incoming_effort: Optional[str]) -> Optional[str]:
     """
@@ -119,6 +124,41 @@ def resolve_reasoning_effort(incoming_effort: Optional[str]) -> Optional[str]:
 
     # Return incoming effort unchanged
     return incoming_effort
+
+
+def _is_pro_model(model_name: str) -> bool:
+    """Check if the model name indicates a pro model (contains 'pro')."""
+    return "pro" in model_name.lower()
+
+
+def enforce_pro_model_min_reasoning(modified_body: Dict[str, Any]) -> None:
+    """
+    Ensure pro models have reasoning effort at least 'medium'.
+
+    Pro models only support medium, high, and xhigh. If the resolved effort
+    is below medium (e.g. low, minimal, none), promote it to medium.
+    Mutates modified_body in place.
+    """
+    model = modified_body.get("model", "")
+    if not _is_pro_model(model):
+        return
+
+    reasoning = modified_body.get("reasoning")
+    if reasoning is None:
+        # Pro model with no reasoning at all - add medium
+        modified_body["reasoning"] = {"effort": PRO_MODEL_MIN_EFFORT, "summary": "auto"}
+        logger.info(f"[PASSTHROUGH] Pro model '{model}' has no reasoning, adding effort={PRO_MODEL_MIN_EFFORT}")
+        return
+
+    if isinstance(reasoning, dict):
+        effort = reasoning.get("effort", "").lower()
+        min_idx = _EFFORT_ORDER.index(PRO_MODEL_MIN_EFFORT)
+        if effort in _EFFORT_ORDER and _EFFORT_ORDER.index(effort) < min_idx:
+            logger.info(
+                f"[PASSTHROUGH] Pro model '{model}' effort '{effort}' below minimum, "
+                f"promoting to '{PRO_MODEL_MIN_EFFORT}'"
+            )
+            modified_body["reasoning"]["effort"] = PRO_MODEL_MIN_EFFORT
 
 
 def resolve_null_reasoning() -> Optional[Dict[str, str]]:
@@ -425,6 +465,9 @@ async def create_response_passthrough(
         if resolved_effort != original_effort:
             modified_body["reasoning"]["effort"] = resolved_effort
             logger.info(f"[PASSTHROUGH] Reasoning effort resolved: {original_effort} -> {resolved_effort}")
+
+    # Enforce minimum reasoning effort for pro models
+    enforce_pro_model_min_reasoning(modified_body)
 
     is_streaming = modified_body.get("stream", False)
 
