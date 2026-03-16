@@ -75,10 +75,10 @@ def resolve_passthrough_model(incoming_model: Optional[str]) -> str:
         if incoming_model.strip().lower().startswith("oca/"):
             return incoming_model.strip()
 
-    # Check if LLM_MODEL_NAME is configured and has oca/ prefix
-    llm_model_name = _get_runtime_env_value("LLM_MODEL_NAME", "")
+    # Check if LLM_RESPONSES_MODEL_NAME is configured and has oca/ prefix
+    llm_model_name = _get_runtime_env_value("LLM_RESPONSES_MODEL_NAME", "")
     if llm_model_name and llm_model_name.lower().startswith("oca/"):
-        logger.info(f"[PASSTHROUGH] Using configured LLM_MODEL_NAME: {llm_model_name}")
+        logger.info(f"[PASSTHROUGH] Using configured LLM_RESPONSES_MODEL_NAME: {llm_model_name}")
         return llm_model_name
 
     # Otherwise, prefix oca/ to the incoming model
@@ -411,20 +411,20 @@ async def create_response_passthrough(
         logger.info(f"[PASSTHROUGH] Model resolved: {original_model} -> {resolved_model}")
 
     # Resolve reasoning effort
-    if "reasoning" in modified_body:
-        if modified_body["reasoning"] is None:
-            # Handle null reasoning - try to fill with LLM_NON_REASONING_STRENGTH
-            resolved_reasoning = resolve_null_reasoning()
-            if resolved_reasoning:
-                modified_body["reasoning"] = resolved_reasoning
-                logger.info(f"[PASSTHROUGH] Null reasoning replaced with: {resolved_reasoning}")
-        elif isinstance(modified_body["reasoning"], dict):
-            # Handle existing reasoning dict - override effort if configured
-            original_effort = modified_body["reasoning"].get("effort")
-            resolved_effort = resolve_reasoning_effort(original_effort)
-            if resolved_effort != original_effort:
-                modified_body["reasoning"]["effort"] = resolved_effort
-                logger.info(f"[PASSTHROUGH] Reasoning effort resolved: {original_effort} -> {resolved_effort}")
+    reasoning_value = modified_body.get("reasoning")
+    if reasoning_value is None:
+        # Handle missing or null reasoning - try to fill with LLM_NON_REASONING_STRENGTH
+        resolved_reasoning = resolve_null_reasoning()
+        if resolved_reasoning:
+            modified_body["reasoning"] = resolved_reasoning
+            logger.info(f"[PASSTHROUGH] Null/missing reasoning replaced with: {resolved_reasoning}")
+    elif isinstance(reasoning_value, dict):
+        # Handle existing reasoning dict - override effort if configured
+        original_effort = reasoning_value.get("effort")
+        resolved_effort = resolve_reasoning_effort(original_effort)
+        if resolved_effort != original_effort:
+            modified_body["reasoning"]["effort"] = resolved_effort
+            logger.info(f"[PASSTHROUGH] Reasoning effort resolved: {original_effort} -> {resolved_effort}")
 
     is_streaming = modified_body.get("stream", False)
 
