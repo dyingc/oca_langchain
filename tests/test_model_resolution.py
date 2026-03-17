@@ -1,125 +1,93 @@
 """
-Tests for Model Name Resolution
-
-This module tests the model name resolution logic in responses_api.py.
+Tests for resolve_model_for_endpoint (replaces resolve_model_name tests).
 """
-
 from unittest.mock import patch
-
-from responses_api import resolve_model_name
-
-
-class TestModelResolution:
-    """Test model name resolution logic."""
-
-    def test_incoming_model_with_oca_prefix(self):
-        """Test that models with oca/ prefix are used as-is."""
-        result = resolve_model_name("oca/gpt-4o")
-        assert result == "oca/gpt-4o"
-
-    def test_incoming_model_with_oca_prefix_whitespace(self):
-        """Test that whitespace is stripped from oca/ models."""
-        result = resolve_model_name("  oca/gpt-4o  ")
-        assert result == "oca/gpt-4o"
-
-    def test_incoming_model_with_oca_prefix_case_insensitive(self):
-        """Test that OCA/ prefix works (case insensitive)."""
-        result = resolve_model_name("OCA/gpt-4o")
-        assert result == "OCA/gpt-4o"
-
-    def test_incoming_model_without_prefix_uses_default(self):
-        """Test that models without oca/ prefix fall back to default."""
-        # Assuming LLM_MODEL_NAME is set in test environment
-        result = resolve_model_name("gpt-4o")
-        # Should return the default model
-        assert "oca/" in result
-
-    def test_incoming_model_empty_string(self):
-        """Test that empty string falls back to default."""
-        result = resolve_model_name("")
-        # Should return the default model
-        assert "oca/" in result
-
-    def test_incoming_model_none_ignored(self):
-        """Test that None is handled gracefully."""
-        result = resolve_model_name(None)
-        # Should return None or default
-        assert result is None or "oca/" in result
+import pytest
+from model_resolver import resolve_model_for_endpoint, FALLBACK_MODEL
 
 
-class TestModelResolutionWithEnv:
-    """Test model resolution with different env configurations."""
-
-    @patch("responses_api._get_default_model", return_value="oca/gpt-5.2")
-    def test_fallback_to_specific_default(self, _mock_get_default_model):
-        """Test fallback to a specific default model."""
-        result = resolve_model_name("gpt-4")
-        assert result == "oca/gpt-5.2"
-
-    @patch("responses_api._get_default_model", return_value="")
-    def test_no_default_set(self, _mock_get_default_model):
-        """Test behavior when no default is set."""
-        result = resolve_model_name("gpt-4o")
-        # Should return incoming as-is
-        assert result == "gpt-4o"
-
-    @patch("responses_api._get_default_model", return_value="oca/custom-model")
-    def test_fallback_to_custom_model(self, _mock_get_default_model):
-        """Test fallback to custom default model."""
-        result = resolve_model_name("some-random-model")
-        assert result == "oca/custom-model"
+CATALOG = {
+    "oca/gpt-4.1": ["CHAT_COMPLETIONS", "RESPONSES"],
+    "oca/gpt-5-codex": ["RESPONSES"],
+    "oca/gpt-oss-120b": ["CHAT_COMPLETIONS"],
+    "oca/gpt-5.4": ["CHAT_COMPLETIONS", "RESPONSES"],
+    "oca/gpt-legacy": [],  # empty list = supports all endpoints (backward compat)
+}
 
 
-class TestModelResolutionEdgeCases:
-    """Test edge cases for model resolution."""
+class TestModelResolutionNoPrefixNormalization:
+    def test_incoming_with_oca_prefix_supported(self):
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("oca/gpt-4.1", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == "oca/gpt-4.1"
 
-    def test_various_oca_prefix_formats(self):
-        """Test various oca/ prefix formats."""
-        # Standard format
-        assert resolve_model_name("oca/gpt-4o") == "oca/gpt-4o"
-        # With whitespace
-        assert resolve_model_name("  oca/gpt-4o  ") == "oca/gpt-4o"
-        # Mixed case
-        result = resolve_model_name("Oca/GPT-4o")
-        assert result.startswith("oca/") or result.startswith("Oca/")
+    def test_incoming_without_oca_prefix_adds_prefix_if_supported(self):
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("gpt-4.1", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == "oca/gpt-4.1"
 
-    def test_model_with_version_numbers(self):
-        """Test models with version numbers."""
-        # These should fall back to default (no oca/ prefix)
-        with patch("responses_api._get_default_model", return_value="oca/gpt-5.2"):
-            assert resolve_model_name("gpt-5.2") == "oca/gpt-5.2"
-            assert resolve_model_name("gpt-5.1-codex") == "oca/gpt-5.2"
-            assert resolve_model_name("llama4") == "oca/gpt-5.2"
+    def test_incoming_with_whitespace_stripped(self):
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("  gpt-4.1  ", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == "oca/gpt-4.1"
 
-    def test_model_with_different_prefixes(self):
-        """Test models with different prefixes."""
-        with patch("responses_api._get_default_model", return_value="oca/gpt-4o"):
-            # These should all fall back to default
-            assert resolve_model_name("openai/gpt-4") == "oca/gpt-4o"
-            assert resolve_model_name("anthropic/claude") == "oca/gpt-4o"
-            assert resolve_model_name("google/gemini") == "oca/gpt-4o"
+    def test_incoming_double_oca_prefix_normalized(self):
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("oca/oca/gpt-4.1", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == "oca/gpt-4.1"
 
 
-class TestModelResolutionIntegration:
-    """Integration tests for model resolution."""
+class TestModelResolutionFallback:
+    def test_none_incoming_falls_back(self):
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint(None, "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == FALLBACK_MODEL
 
-    def test_resolution_logs_info(self):
-        """Test that resolution logs appropriate messages."""
-        with patch("responses_api._get_default_model", return_value="oca/gpt-5.2"), \
-             patch("responses_api.logger.info") as mock_info:
-            result = resolve_model_name("gpt-4o")
+    def test_empty_incoming_falls_back(self):
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == FALLBACK_MODEL
 
-        assert result == "oca/gpt-5.2"
-        assert mock_info.call_count == 1
-        log_message = mock_info.call_args[0][0]
-        assert "MODEL RESOLUTION" in log_message
-        assert "gpt-4o" in log_message
-        assert "oca/gpt-5.2" in log_message
+    def test_unsupported_endpoint_falls_back(self):
+        # gpt-5-codex is RESPONSES-only; using for CHAT_COMPLETIONS → fallback
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("gpt-5-codex", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == FALLBACK_MODEL
 
-    def test_no_log_when_using_oca_prefix(self):
-        """Test that no resolution log when model already has oca/ prefix."""
-        with patch("responses_api.logger.info") as mock_info:
-            result = resolve_model_name("oca/gpt-4o")
+    def test_unknown_model_falls_back(self):
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("gpt-unknown", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == FALLBACK_MODEL
 
-        assert result == "oca/gpt-4o"
-        assert mock_info.call_count == 0
+    def test_empty_supported_api_list_treated_as_supports_all(self):
+        # oca/gpt-legacy has supported_api_list=[] — must be usable for any endpoint (backward compat)
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("gpt-legacy", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == "oca/gpt-legacy"
+
+    def test_empty_supported_api_list_supports_responses_too(self):
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("gpt-legacy", "LLM_RESPONSES_MODEL_NAME", "RESPONSES", CATALOG) == "oca/gpt-legacy"
+
+
+class TestModelResolutionEnvOverride:
+    def test_env_override_used_when_set(self):
+        with patch("model_resolver._get_runtime_env_value", return_value="oca/gpt-5.4"):
+            assert resolve_model_for_endpoint("gpt-5-codex", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == "oca/gpt-5.4"
+
+    def test_env_override_normalized_without_prefix(self):
+        with patch("model_resolver._get_runtime_env_value", return_value="gpt-4.1"):
+            assert resolve_model_for_endpoint("gpt-5-codex", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG) == "oca/gpt-4.1"
+
+    def test_env_override_wrong_endpoint_raises_500_error(self):
+        with patch("model_resolver._get_runtime_env_value", return_value="oca/gpt-5-codex"):
+            with pytest.raises(ValueError) as exc_info:
+                resolve_model_for_endpoint("gpt-4.1", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG)
+        assert "CHAT_COMPLETIONS" in str(exc_info.value)
+
+    def test_env_override_not_in_catalog_raises_error(self):
+        with patch("model_resolver._get_runtime_env_value", return_value="oca/nonexistent"):
+            with pytest.raises(ValueError) as exc_info:
+                resolve_model_for_endpoint("gpt-4.1", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", CATALOG)
+        assert "not in the model catalog" in str(exc_info.value)
+
+
+class TestModelResolutionEmptyCatalog:
+    def test_empty_catalog_uses_prefixed_incoming_fail_open(self):
+        with patch("model_resolver._get_runtime_env_value", return_value=""):
+            assert resolve_model_for_endpoint("gpt-4.1", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", {}) == "oca/gpt-4.1"
+
+    def test_empty_catalog_env_override_used_without_validation(self):
+        with patch("model_resolver._get_runtime_env_value", return_value="oca/gpt-4.1"):
+            assert resolve_model_for_endpoint("gpt-5-codex", "LLM_MODEL_NAME", "CHAT_COMPLETIONS", {}) == "oca/gpt-4.1"
