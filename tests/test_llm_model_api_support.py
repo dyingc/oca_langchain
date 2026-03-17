@@ -297,3 +297,47 @@ def test_fallback_model_empty_supported_list_no_warning():
         )
     warning_calls = [str(c) for c in mock_log.warning.call_args_list]
     assert not any("CHAT_COMPLETIONS" in w or "RESPONSES" in w for w in warning_calls)
+
+
+def test_from_env_normalizes_model_name_without_prefix(monkeypatch):
+    """LLM_MODEL_NAME=gpt-4.1 should be normalized to oca/gpt-4.1 before startup validation."""
+    monkeypatch.setenv("LLM_API_URL", "http://fake")
+    monkeypatch.setenv("LLM_MODEL_NAME", "gpt-4.1")  # no oca/ prefix
+    monkeypatch.setenv("LLM_MODELS_API_URL", "http://fake/models")
+
+    tm = _make_token_manager()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "data": [
+            {
+                "litellm_params": {"model": "oca/gpt-4.1"},
+                "model_info": {"supported_api_list": ["CHAT_COMPLETIONS", "RESPONSES"]},
+            }
+        ]
+    }
+    mock_resp.raise_for_status.return_value = None
+    tm.request.return_value = mock_resp
+
+    from core.llm import OCAChatModel
+    # Should NOT raise ValueError about model not in available_models
+    model = OCAChatModel.from_env(tm)
+    assert model.model == "oca/gpt-4.1"
+
+
+def test_from_env_model_already_prefixed_unchanged(monkeypatch):
+    """LLM_MODEL_NAME=oca/gpt-4.1 should stay as-is."""
+    monkeypatch.setenv("LLM_API_URL", "http://fake")
+    monkeypatch.setenv("LLM_MODEL_NAME", "oca/gpt-4.1")
+    monkeypatch.setenv("LLM_MODELS_API_URL", "http://fake/models")
+
+    tm = _make_token_manager()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "data": [{"litellm_params": {"model": "oca/gpt-4.1"}, "model_info": {}}]
+    }
+    mock_resp.raise_for_status.return_value = None
+    tm.request.return_value = mock_resp
+
+    from core.llm import OCAChatModel
+    model = OCAChatModel.from_env(tm)
+    assert model.model == "oca/gpt-4.1"

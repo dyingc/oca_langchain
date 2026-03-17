@@ -477,13 +477,18 @@ class OCAChatModel(BaseChatModel):
     @classmethod
     def from_env(cls, token_manager: OCAOauth2TokenManager, debug: bool = False) -> OCAChatModel:
         api_url = os.getenv("LLM_API_URL")
-        model = os.getenv("LLM_MODEL_NAME", "")
+        model = os.getenv("LLM_MODEL_NAME", "").strip()
+        # Normalize: add oca/ prefix if missing (same rule as model_resolver)
+        if model and not model.lower().startswith("oca/"):
+            model = f"oca/{model}"
         temperature = float(os.getenv("LLM_TEMPERATURE", 0.7))
         models_api_url = os.getenv("LLM_MODELS_API_URL")
         llm_request_timeout = float(os.getenv("LLM_REQUEST_TIMEOUT", 120.0))
 
-        if not api_url: raise ValueError("Error: Please ensure .env contains LLM_API_URL.")
-        if not models_api_url and not model: raise ValueError("Error: Either LLM_MODELS_API_URL must be set or LLM_MODEL_NAME must be provided in .env.")
+        if not api_url:
+            raise ValueError("Error: Please ensure .env contains LLM_API_URL.")
+        if not models_api_url and not model:
+            raise ValueError("Error: Either LLM_MODELS_API_URL must be set or LLM_MODEL_NAME must be provided in .env.")
 
         return cls(
             api_url=api_url, model=model, temperature=temperature,
