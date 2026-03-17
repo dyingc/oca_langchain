@@ -448,20 +448,13 @@ async def create_response(
     chat_model = _get_chat_model()
 
     # Resolve model name using shared resolver.
-    # Guard against non-dict model_api_support (e.g., mock objects in tests);
-    # passing a non-dict as catalog would cause spurious fallbacks.
     original_model = request.model
-    model_api_support = (
-        chat_model.model_api_support
-        if isinstance(chat_model.model_api_support, dict)
-        else {}
-    )
     try:
         request.model = resolve_model_for_endpoint(
             request.model,
             "LLM_RESPONSES_MODEL_NAME",
             "RESPONSES",
-            model_api_support,
+            chat_model.model_api_support,
         )
     except ValueError as e:
         raise HTTPException(
