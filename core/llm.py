@@ -5,7 +5,8 @@ import time
 import requests
 import httpx
 from httpx import AsyncHTTPTransport, Proxy
-from typing import Any, List, Mapping, Optional, Iterator, AsyncIterator
+from typing import Any, Dict, List, Mapping, Optional, Iterator, AsyncIterator
+from pydantic import Field
 
 # --- LangChain Imports ---
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun, AsyncCallbackManagerForLLMRun
@@ -353,7 +354,8 @@ class OCAChatModel(BaseChatModel):
     _debug: bool = False
 
     token_manager: OCAOauth2TokenManager
-    available_models: List[str] = []
+    available_models: List[str] = Field(default_factory=list)
+    model_api_support: Dict[str, List[str]] = Field(default_factory=dict)
 
     def __init__(self, **data: Any):
         """
@@ -375,9 +377,7 @@ class OCAChatModel(BaseChatModel):
             )
 
     def fetch_available_models(self):
-        """
-        Fetch and populate the available models list via API, with built-in retry logic for "cold start" issues.
-        """
+        """Fetch and cache the available models list and their supported endpoint types."""
         if not self.models_api_url:
             if self._debug:
                 print("Warning: LLM_MODELS_API_URL is not configured, cannot fetch models dynamically.")
@@ -391,7 +391,7 @@ class OCAChatModel(BaseChatModel):
         }
 
         max_retries = 3
-        retry_delay = 3  # seconds
+        retry_delay = 3
 
         for attempt in range(max_retries):
             try:
@@ -407,19 +407,49 @@ class OCAChatModel(BaseChatModel):
                 response.raise_for_status()
 
                 models_data = response.json().get("data", [])
-                # Support both old format ({"id": "oca/gpt-5.2"}) and new format
-                # ({"litellm_params": {"model": "oca/gpt-5.2"}})
+
+                # Use temp snapshots — only commit to self.* on full success
+                # This preserves prior cache on partial failure and prevents double-prefix accumulation
+                new_available = []
+                new_api_support = {}
+
                 for model in models_data:
                     model_id = model.get("id") or model.get("litellm_params", {}).get("model")
                     if model_id:
-                        self.available_models.append(model_id)
+                        new_available.append(model_id)
+                        supported = model.get("model_info", {}).get("supported_api_list") or []
+                        new_api_support[model_id] = [s.upper() for s in supported]
+
+                # Atomic commit: both fields replaced together only on success
+                self.available_models = new_available
+                self.model_api_support = new_api_support
 
                 if not self.available_models:
-                    if self._debug: print("Warning: The API returned an empty models list.")
+                    if self._debug:
+                        print("Warning: The API returned an empty models list.")
                 else:
-                    if self._debug: print(f"Successfully retrieved {len(self.available_models)} available models.")
+                    if self._debug:
+                        print(f"Successfully retrieved {len(self.available_models)} available models.")
 
-                return  # Success, exit the function
+                    # Startup validation: warn if fallback model has issues
+                    from model_resolver import FALLBACK_MODEL
+                    fallback_support = new_api_support.get(FALLBACK_MODEL)
+                    if fallback_support is None:
+                        logger.warning(
+                            f"Fallback model '{FALLBACK_MODEL}' is not in the model catalog. "
+                            f"Requests routed to it will fail downstream."
+                        )
+                    else:
+                        if fallback_support and "CHAT_COMPLETIONS" not in fallback_support:
+                            logger.warning(
+                                f"Fallback model '{FALLBACK_MODEL}' does not support CHAT_COMPLETIONS."
+                            )
+                        if fallback_support and "RESPONSES" not in fallback_support:
+                            logger.warning(
+                                f"Fallback model '{FALLBACK_MODEL}' does not support RESPONSES."
+                            )
+
+                return  # Success
 
             except (ConnectionError, httpx.ConnectError, httpx.ReadTimeout) as e:
                 if attempt < max_retries - 1:
@@ -428,13 +458,20 @@ class OCAChatModel(BaseChatModel):
                     time.sleep(retry_delay)
                 else:
                     if self._debug:
-                        print(f"Error: Unable to connect to models API after multiple attempts. Falling back to .env specified model. Reason: {e}")
-                    if self.model: self.available_models = [self.model]
-                    else: self.available_models = []
+                        print(f"Error: Unable to connect to models API after multiple attempts. Reason: {e}")
+                    # Do NOT update self.available_models or self.model_api_support
+                    # Prior cached values are preserved; if first call, they remain [] / {}
+                    # Exception: if first call failed, set startup fallback for __init__ validation
+                    if not self.available_models and self.model:
+                        self.available_models = [self.model]
 
             except json.JSONDecodeError:
-                if self._debug: print("Error: Failed to parse models API response; not a valid JSON format.")
-                self.available_models = []
+                if self._debug:
+                    print("Error: Failed to parse models API response; not a valid JSON format.")
+                # Do NOT clear self.available_models — preserve prior cache
+                # Exception: if first call failed, set startup fallback for __init__ validation
+                if not self.available_models and self.model:
+                    self.available_models = [self.model]
                 return
 
     @classmethod
