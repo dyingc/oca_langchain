@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, System
 from core.llm import OCAChatModel
 from core.oauth2_token_manager import OCAOauth2TokenManager
 from core.logger import get_logger
+from model_resolver import resolve_model_for_endpoint
 
 # Import Anthropic API endpoints
 from anthropic_api import create_message
@@ -390,15 +391,21 @@ async def create_chat_completion(request: ChatCompletionRequest):
     """
     chat_model = get_chat_model()
 
-    # Check if the requested model is available
-    if request.model not in chat_model.available_models:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Model '{request.model}' not found. Available models: {', '.join(chat_model.available_models)}"
+    # Resolve the requested model using endpoint-aware model resolution
+    try:
+        resolved_model = resolve_model_for_endpoint(
+            request.model,
+            "LLM_MODEL_NAME",
+            "CHAT_COMPLETIONS",
+            chat_model.model_api_support,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    chat_model.model = resolved_model
+    request.model = resolved_model
 
     # Update the model instance with parameters from the request
-    chat_model.model = request.model
     chat_model.temperature = request.temperature
 
     # NOTE: Validation moved to unified _validate_tool_call_sequences() in core/llm.py
