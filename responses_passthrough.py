@@ -9,36 +9,23 @@ This is particularly useful for Codex CLI and other tools that use the Response 
 """
 
 import json
-import os
 from typing import Optional, Dict, Any, AsyncIterator
 from fastapi import HTTPException, Header
 from fastapi.responses import StreamingResponse
 import httpx
 
-from dotenv import dotenv_values
 from core.logger import get_logger
 from core.oauth2_token_manager import OCAOauth2TokenManager
-
-# Path to .env file for dynamic lookup
-_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+from runtime_env import _get_runtime_env_value
+from model_resolver import resolve_model_for_endpoint
 
 logger = get_logger(__name__)
 
 
-def _get_runtime_env_value(key: str, default: str = "") -> str:
-    """
-    Read env value with .env as source of truth when the file exists.
-
-    This avoids stale `os.environ` values for keys that were removed/commented
-    out from .env while the process is still running.
-    """
-    if os.path.exists(_ENV_PATH):
-        values = dotenv_values(_ENV_PATH)
-        value = values.get(key)
-        if value is None:
-            return default
-        return str(value).strip()
-    return os.getenv(key, default).strip()
+def _get_chat_model():
+    """Lazy import to avoid circular dependency with api.py."""
+    from api import get_chat_model
+    return get_chat_model()
 
 
 def _get_responses_api_url() -> Optional[str]:
@@ -53,42 +40,6 @@ def _get_responses_api_url() -> Optional[str]:
 def is_passthrough_enabled() -> bool:
     """Check if passthrough mode is enabled (LLM_RESPONSES_API_URL is configured)."""
     return bool(_get_responses_api_url())
-
-
-def resolve_passthrough_model(incoming_model: Optional[str]) -> str:
-    """
-    Resolve the model name for passthrough requests.
-
-    Logic:
-    1. If incoming model already starts with "oca/", use it as-is
-    2. Else if LLM_MODEL_NAME is defined in .env and starts with "oca/", use it
-    3. Otherwise, prefix "oca/" to the incoming model name
-
-    Args:
-        incoming_model: The model name from the incoming request (e.g., "gpt-5.1-codex-mini")
-
-    Returns:
-        The resolved model name (e.g., "oca/gpt-5.1-codex-mini" or the configured LLM_MODEL_NAME)
-    """
-    if incoming_model:
-        # If already has oca/ prefix, use as-is
-        if incoming_model.strip().lower().startswith("oca/"):
-            return incoming_model.strip()
-
-    # Check if LLM_RESPONSES_MODEL_NAME is configured and has oca/ prefix
-    llm_model_name = _get_runtime_env_value("LLM_RESPONSES_MODEL_NAME", "")
-    if llm_model_name and llm_model_name.lower().startswith("oca/"):
-        logger.info(f"[PASSTHROUGH] Using configured LLM_RESPONSES_MODEL_NAME: {llm_model_name}")
-        return llm_model_name
-
-    # Otherwise, prefix oca/ to the incoming model
-    if incoming_model:
-        resolved = f"oca/{incoming_model.strip()}"
-        logger.info(f"[PASSTHROUGH] Prefixed model name: {incoming_model} -> {resolved}")
-        return resolved
-
-    # Fallback to LLM_MODEL_NAME even without oca/ prefix, or empty string
-    return llm_model_name or ""
 
 
 # Valid reasoning effort values
@@ -441,7 +392,19 @@ async def create_response_passthrough(
 
     # Resolve the model name before forwarding
     original_model = request_body.get("model", "")
-    resolved_model = resolve_passthrough_model(original_model)
+    try:
+        chat_model = _get_chat_model()
+        resolved_model = resolve_model_for_endpoint(
+            original_model,
+            "LLM_RESPONSES_MODEL_NAME",
+            "RESPONSES",
+            chat_model.model_api_support,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"type": "error", "error": {"type": "configuration_error", "message": str(e)}},
+        )
 
     # Create a copy of the request body with resolved model
     modified_body = copy.deepcopy(request_body)
