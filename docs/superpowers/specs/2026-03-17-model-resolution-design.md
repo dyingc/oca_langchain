@@ -21,8 +21,22 @@ Additionally, the backend distinguishes models by supported endpoint type — no
 1. When `LLM_MODEL_NAME` (chat) or `LLM_RESPONSES_MODEL_NAME` (responses) is not set, automatically resolve `gpt-x` → `oca/gpt-x` if that model supports the endpoint
 2. Fall back to `oca/gpt-5.4` when no match is found
 3. Cache the model catalog (including `supported_api_list`) at startup — no per-request API calls
-4. Unify the three duplicated `_get_runtime_env_value()` implementations
+4. Unify the two duplicated `_get_runtime_env_value()` implementations (`responses_api.py` and `responses_passthrough.py`)
 5. When an env override is explicitly set but the model doesn't support the endpoint, return HTTP 500 with a diagnostic error (explicit misconfiguration should be visible)
+
+## Breaking Changes
+
+This feature changes observable behavior. Callers must be aware:
+
+| Before | After |
+|--------|-------|
+| Unknown model → HTTP 404 | Unknown model → silently resolved to `oca/gpt-5.4` fallback (or prefixed candidate if supported) |
+| Env override not validated against endpoint | Env override pointing to wrong endpoint → HTTP 500 with diagnostic message |
+| Response `model` field echoes original request value | Response `model` field shows the resolved model name (may differ from request) |
+| Chat completions uses incoming model directly | Chat completions may substitute incoming model with resolved/fallback model |
+| `responses_api.py` env override key: `LLM_MODEL_NAME` | Changed to `LLM_RESPONSES_MODEL_NAME` |
+
+**Existing tests** in `test_model_resolution.py` and `test_dynamic_env_reload.py` must be updated — they import and assert against `resolve_model_name()` which will be replaced by `resolve_model_for_endpoint()` with a different signature.
 
 ## Non-Goals
 
@@ -144,6 +158,22 @@ model_api_support: Dict[str, List[str]] = Field(default_factory=dict)
 ```
 
 Fixes existing mutable-default issue on `available_models` (Pydantic v1/v2 / LangChain BaseChatModel compatibility).
+
+**`from_env()` change — normalize `LLM_MODEL_NAME` before passing to constructor:**
+
+The `__init__` validates `self.model not in self.available_models` at startup. If `LLM_MODEL_NAME=gpt-4.1` (without `oca/` prefix) is configured and the catalog contains `oca/gpt-4.1`, this check fails and the service refuses to start. Fix: normalize the configured model name in `from_env()`:
+
+```python
+@classmethod
+def from_env(cls, token_manager, debug=False):
+    model = os.getenv("LLM_MODEL_NAME", "").strip()
+    # Normalize: add oca/ prefix if missing (same rule as resolver)
+    if model and not model.lower().startswith("oca/"):
+        model = f"oca/{model}"
+    ...
+```
+
+This ensures the startup validation can match the catalog, and the resolved env value aligns with the resolver's normalization logic.
 
 **`fetch_available_models()` — atomic update via temp snapshots:**
 
@@ -347,8 +377,13 @@ All branches of the resolution logic:
 
 ### Integration tests (existing `tests/` directory)
 
+**Startup regression:**
+- `LLM_MODEL_NAME=gpt-4.1` (no prefix) + catalog has `oca/gpt-4.1` → service starts successfully (model normalized in `from_env()`)
+- `LLM_MODEL_NAME=gpt-4.1` + catalog fetch fails → service starts with `available_models=["oca/gpt-4.1"]`, model_api_support empty
+
 **Chat completions (`/v1/chat/completions`):**
 - Model `"gpt-4.1"` (no prefix) → resolves to `"oca/gpt-4.1"`, response body `model` field also shows `"oca/gpt-4.1"` (not original `"gpt-4.1"`)
+- Model unknown (not in catalog, no fallback support) → HTTP 200 with model `"oca/gpt-5.4"` in response (no longer HTTP 404)
 - Model `"gpt-5-codex"` (RESPONSES-only) → fallback to `oca/gpt-5.4`
 - `LLM_MODEL_NAME=oca/gpt-5-codex` → HTTP 500 (misconfiguration)
 - `LLM_MODEL_NAME=gpt-4.1` (without oca/ prefix) → normalized to `oca/gpt-4.1`, used if supported
@@ -366,6 +401,18 @@ All branches of the resolution logic:
 
 **Startup resilience:**
 - Catalog fetch failed at startup → env override used without endpoint validation (warn only)
+
+**Error format verification (misconfiguration):**
+- Chat completions misconfiguration → HTTP 500, `detail` is a plain string
+- Responses API (LangChain path) misconfiguration → HTTP 500, `detail` is `{"type": "error", "error": {...}}`
+- Responses passthrough misconfiguration → HTTP 500, same Response API envelope format as LangChain path
+
+**Catalog empty but successful (fail-open behavior):**
+- Backend returns empty model list → same fail-open behavior as fetch failure (availability-first design)
+
+**Existing test file updates required:**
+- `tests/test_model_resolution.py`: replace `resolve_model_name` with `resolve_model_for_endpoint` (different signature + behavior)
+- `tests/test_dynamic_env_reload.py`: update env key from `LLM_MODEL_NAME` to `LLM_RESPONSES_MODEL_NAME` for responses tests
 
 ---
 
