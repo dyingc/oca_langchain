@@ -14,13 +14,13 @@ Reference: https://platform.openai.com/docs/api-reference/responses
 
 import json
 import asyncio
-import os
 from typing import Optional, Dict, Any
 from fastapi import HTTPException, Header
 from fastapi.responses import StreamingResponse
-from dotenv import dotenv_values
 
 from langchain_core.messages import AIMessage
+
+from model_resolver import resolve_model_for_endpoint
 
 from models.responses_types import (
     ResponseRequest,
@@ -48,59 +48,6 @@ from converters.responses_converter import (
 from core.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-# --- Model Resolution ---
-_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-
-
-def _get_runtime_env_value(key: str, default: str = "") -> str:
-    """
-    Read env value with .env as source of truth when the file exists.
-
-    This avoids stale values in `os.environ` when a key is removed/commented out
-    from .env during runtime.
-    """
-    if os.path.exists(_ENV_PATH):
-        values = dotenv_values(_ENV_PATH)
-        value = values.get(key)
-        if value is None:
-            return default
-        return str(value).strip()
-    return os.getenv(key, default).strip()
-
-
-def _get_default_model() -> str:
-    """Get LLM_MODEL_NAME from .env with runtime reload."""
-    return _get_runtime_env_value("LLM_MODEL_NAME", "")
-
-
-def resolve_model_name(incoming_model: str) -> str:
-    """
-    Resolve which model to use.
-
-    If incoming model starts with 'oca/', use it directly.
-    Otherwise, fall back to LLM_MODEL_NAME from .env.
-
-    Args:
-        incoming_model: The model name from the incoming request
-
-    Returns:
-        The model name to use
-    """
-    if incoming_model and incoming_model.strip().lower().startswith("oca/"):
-        # Use incoming model if it already has oca/ prefix
-        return incoming_model.strip()
-
-    default_model = _get_default_model()
-
-    # Fall back to default model from env
-    if default_model:
-        logger.info(f"[MODEL RESOLUTION] Incoming model '{incoming_model}' doesn't have oca/ prefix, using default: {default_model}")
-        return default_model
-
-    # No default set, use incoming as-is (will likely fail validation)
-    return incoming_model
 
 
 # --- In-Memory Response Storage ---
@@ -500,21 +447,26 @@ async def create_response(
     # Get chat model
     chat_model = _get_chat_model()
 
-    # Resolve model name (use LLM_MODEL_NAME from env if set, otherwise use incoming)
+    # Resolve model name using shared resolver.
+    # Guard against non-dict model_api_support (e.g., mock objects in tests);
+    # passing a non-dict as catalog would cause spurious fallbacks.
     original_model = request.model
-    request.model = resolve_model_name(request.model)
-
-    # Check if model is available
-    if request.model not in chat_model.available_models:
+    model_api_support = (
+        chat_model.model_api_support
+        if isinstance(chat_model.model_api_support, dict)
+        else {}
+    )
+    try:
+        request.model = resolve_model_for_endpoint(
+            request.model,
+            "LLM_RESPONSES_MODEL_NAME",
+            "RESPONSES",
+            model_api_support,
+        )
+    except ValueError as e:
         raise HTTPException(
-            status_code=404,
-            detail={
-                "type": "error",
-                "error": {
-                    "type": "not_found_error",
-                    "message": f"Model '{request.model}' not found. Available models: {', '.join(chat_model.available_models)}"
-                }
-            }
+            status_code=500,
+            detail={"type": "error", "error": {"type": "configuration_error", "message": str(e)}},
         )
 
     # Log request
