@@ -78,6 +78,9 @@ class OCAOauth2TokenManager:
         self.connection_mode: ConnectionMode = ConnectionMode.DIRECT
         self.access_token: Optional[str] = None
         self.expires_at: Optional[datetime] = None
+        # Track the proxy URL for which reachability was last verified, to avoid
+        # re-checking on every request when FORCE_PROXY=true is steady.
+        self._last_verified_proxy_url: Optional[str] = None
 
         # Network timeout: try to get from env, otherwise defaults to 2 seconds
         self.timeout: float = 2.0
@@ -109,6 +112,25 @@ class OCAOauth2TokenManager:
                 if self._debug:
                     print("Loaded a valid Access Token from .env file.")
 
+    def _is_proxy_reachable(self) -> bool:
+        """
+        Quick TCP socket check: verify the configured proxy port is open and accepting connections.
+        Returns True if the proxy host:port is reachable, False otherwise.
+        """
+        if not self.proxy_url:
+            return False
+        try:
+            import socket
+            parsed = urlparse(self.proxy_url)
+            host = parsed.hostname
+            port = parsed.port or 8080
+            if not host:
+                return False
+            with socket.create_connection((host, port), timeout=2.0):
+                return True
+        except OSError:
+            return False
+
     def _update_connection_mode_from_env(self) -> None:
         """
         Dynamically enforce proxy usage based on FORCE_PROXY env.
@@ -133,7 +155,21 @@ class OCAOauth2TokenManager:
             force_proxy = os.getenv("FORCE_PROXY", "false").lower() == "true"
         except Exception:
             force_proxy = False
-        if force_proxy and self.connection_mode != ConnectionMode.PROXY:
+        if force_proxy:
+            # Check proxy reachability when switching to PROXY mode for the first time,
+            # or when the proxy URL has changed since the last successful verification.
+            needs_check = (
+                self.connection_mode != ConnectionMode.PROXY
+                or self.proxy_url != self._last_verified_proxy_url
+            )
+            if needs_check:
+                if not self._is_proxy_reachable():
+                    raise ConnectionError(
+                        f"FORCE_PROXY=true but the proxy at {self.proxy_url!r} is not reachable. "
+                        "Please start your proxy (e.g. Burp Suite) before running the server, "
+                        "or set FORCE_PROXY=false in .env to use direct connection."
+                    )
+                self._last_verified_proxy_url = self.proxy_url
             if self._debug:
                 print("FORCE_PROXY enabled — switching to proxy mode for all requests.")
             self.connection_mode = ConnectionMode.PROXY
