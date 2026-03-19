@@ -164,11 +164,10 @@ class OCAOauth2TokenManager:
             )
             if needs_check:
                 if not self._is_proxy_reachable():
-                    raise ConnectionError(
-                        f"FORCE_PROXY=true but the proxy at {self.proxy_url!r} is not reachable. "
-                        "Please start your proxy (e.g. Burp Suite) before running the server, "
-                        "or set FORCE_PROXY=false in .env to use direct connection."
-                    )
+                    # Proxy is configured but not running — silently treat as direct connection.
+                    if self._debug:
+                        print(f"FORCE_PROXY=true but proxy at {self.proxy_url!r} is not reachable, falling back to direct connection.")
+                    return
                 self._last_verified_proxy_url = self.proxy_url
             if self._debug:
                 print("FORCE_PROXY enabled — switching to proxy mode for all requests.")
