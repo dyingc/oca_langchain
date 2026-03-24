@@ -1,0 +1,18 @@
+approval_policy = "on-request"
+model_provider = "oca"
+preferred_auth_method = "apikey"
+model = "${default_model}"
+profile = "${default_profile}"
+sandbox_mode = "workspace-write"
+web_search_request = true
+
+trust_level = "trusted"
+
+[model_providers.oca]
+base_url = "https://code-internal.aiservice.us-chicago-1.oci.oraclecloud.com/20250206/app/litellm"
+http_headers = { "client" = "codex-cli", "client-version" = "0" }
+model = "${provider_default_model}"
+name = "Oracle Code Assist"
+wire_api = "responses"
+
+${profiles_block}

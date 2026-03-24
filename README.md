@@ -192,6 +192,35 @@ Anthropic-Compatible Endpoints (Messages API)
 
 Note: Both formats share the same backend and OAuth2 auth.
 
+## Codex Config Generator
+
+You can generate a fresh Codex CLI config from the live internal model catalog:
+
+```bash
+python scripts/generate_codex_config.py --output /tmp/config.toml
+```
+
+The script uses the shared OAuth2 token manager with the refresh-token flow from `.env`, calls the internal LiteLLM model info endpoint through the same transport logic, filters known profile mappings, and renders `templates/codex_config.toml.template`.
+
+Preview to stdout:
+
+```bash
+python scripts/generate_codex_config.py
+```
+
+Write directly to `~/.codex/config.toml` and create a backup:
+
+```bash
+python scripts/generate_codex_config.py --apply
+```
+
+Useful flags:
+
+- `--env-file /path/to/.env`
+- `--default-model oca/gpt-5.4`
+- `--default-profile gpt-5-4`
+- `--output /path/to/config.toml`
+
 ### Quick Usage Examples
 
 OpenAI non-streaming:
