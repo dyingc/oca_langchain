@@ -412,9 +412,19 @@ async def create_chat_completion(request: ChatCompletionRequest):
     # No need to pre-validate here - it will be done automatically in _stream()/_astream()
     lc_messages = convert_to_langchain_messages(request.messages)
 
+    # Log request with size
+    request_size = len(json.dumps(request.model_dump(mode='json'), ensure_ascii=False))
+    logger.info(
+        f"[CHAT COMPLETIONS] model={request.model}, "
+        f"stream={request.stream}, "
+        f"messages={len(request.messages)}, "
+        f"request_size={request_size}"
+    )
+
     # --- Streaming response ---
     if request.stream:
         async def stream_generator():
+            total_response_size = 0
             try:
                 # Use astream for asynchronous streaming
                 async for chunk in chat_model.astream(lc_messages, max_tokens=request.max_tokens, tool_choice=request.tool_choice, tools=request.tools):
@@ -434,7 +444,9 @@ async def create_chat_completion(request: ChatCompletionRequest):
                                 delta=DeltaMessage(content=content_delta, tool_calls=tool_calls_delta)
                             )]
                         )
-                        yield f"data: {stream_response.json()}\n\n"
+                        chunk_data = f"data: {stream_response.json()}\n\n"
+                        total_response_size += len(chunk_data)
+                        yield chunk_data
 
                 # Send final [DONE] signal
                 final_chunk = ChatCompletionStreamResponse(
@@ -445,8 +457,15 @@ async def create_chat_completion(request: ChatCompletionRequest):
                         finish_reason="stop"
                     )]
                 )
-                yield f"data: {final_chunk.json()}\n\n"
-                yield "data: [DONE]\n\n"
+                done_data = f"data: {final_chunk.json()}\n\ndata: [DONE]\n\n"
+                total_response_size += len(done_data)
+                yield done_data
+
+                logger.info(
+                    f"[CHAT COMPLETIONS] Completed streaming response, "
+                    f"model={request.model}, "
+                    f"response_size={total_response_size}"
+                )
 
             except Exception as e:
                 print(f"Error during streaming: {e}")
@@ -483,6 +502,12 @@ async def create_chat_completion(request: ChatCompletionRequest):
                     index=0,
                     message=ChatMessage(role="assistant", content=response.content, tool_calls=tool_calls)
                 )]
+            )
+            response_size = len(json.dumps(completion_response.model_dump(mode='json'), ensure_ascii=False))
+            logger.info(
+                f"[CHAT COMPLETIONS] Completed response, "
+                f"model={request.model}, "
+                f"response_size={response_size}"
             )
             return completion_response
 

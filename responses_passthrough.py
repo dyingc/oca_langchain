@@ -194,9 +194,12 @@ async def passthrough_stream_generator(
     ca_bundle = _get_runtime_env_value("SSL_CERT_FILE", "") or _get_runtime_env_value("REQUESTS_CA_BUNDLE", "")
     disable_ssl = _get_runtime_env_value("DISABLE_SSL_VERIFY", "false").lower() == "true"
 
+    import json as _json
+    _body_size = len(_json.dumps(request_body))
     logger.info(
         f"[PASSTHROUGH] Starting streaming request to {api_url}, "
-        f"model={request_body.get('model')}, response_id={response_id}"
+        f"model={request_body.get('model')}, response_id={response_id}, "
+        f"request_body_size={_body_size}"
     )
 
     try:
@@ -253,10 +256,16 @@ async def passthrough_stream_generator(
                     )
 
                 # Stream the response back
+                total_response_size = 0
                 async for line in response.aiter_lines():
-                    yield f"{line}\n"
+                    chunk = f"{line}\n"
+                    total_response_size += len(chunk)
+                    yield chunk
 
-                logger.info(f"[PASSTHROUGH] Completed streaming response {response_id}")
+                logger.info(
+                    f"[PASSTHROUGH] Completed streaming response {response_id}, "
+                    f"response_size={total_response_size}"
+                )
 
     except httpx.RequestError as e:
         logger.exception(f"[PASSTHROUGH ERROR] Connection failed: {e}")
@@ -311,9 +320,12 @@ async def passthrough_non_streaming(
     ca_bundle = _get_runtime_env_value("SSL_CERT_FILE", "") or _get_runtime_env_value("REQUESTS_CA_BUNDLE", "")
     disable_ssl = _get_runtime_env_value("DISABLE_SSL_VERIFY", "false").lower() == "true"
 
+    import json as _json
+    _body_size = len(_json.dumps(request_body))
     logger.info(
         f"[PASSTHROUGH] Starting non-streaming request to {api_url}, "
-        f"model={request_body.get('model')}, response_id={response_id}"
+        f"model={request_body.get('model')}, response_id={response_id}, "
+        f"request_body_size={_body_size}"
     )
 
     # Configure proxies
@@ -350,7 +362,11 @@ async def passthrough_non_streaming(
                 }
             )
 
-        logger.info(f"[PASSTHROUGH] Completed non-streaming response {response_id}")
+        response_size = len(response.text)
+        logger.info(
+            f"[PASSTHROUGH] Completed non-streaming response {response_id}, "
+            f"response_size={response_size}"
+        )
         return response.json()
 
     except requests.exceptions.RequestException as e:

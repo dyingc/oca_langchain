@@ -189,12 +189,19 @@ async def anthropic_stream_generator(
     Yields:
         Server-Sent Events (SSE) formatted strings
     """
+    total_response_size = 0
+
+    def _track(data: str) -> str:
+        nonlocal total_response_size
+        total_response_size += len(data)
+        return data
+
     try:
         chat_model = _get_chat_model()
         chat_model.model = model
 
         # Send message_start event
-        yield generate_message_start(message_id, model)
+        yield _track(generate_message_start(message_id, model))
 
         # Start streaming from LangChain
         content_buffer = ""
@@ -225,19 +232,19 @@ async def anthropic_stream_generator(
             if content_delta:
                 # Start text block on first text content
                 if not text_block_started:
-                    yield generate_content_block_start(
+                    yield _track(generate_content_block_start(
                         index=block_index,
                         content_block={"type": "text", "text": ""}
-                    )
+                    ))
                     text_block_started = True
 
                 content_buffer += content_delta
                 text_block_has_content = True
-                yield generate_content_block_delta(
+                yield _track(generate_content_block_delta(
                     index=block_index,
                     delta_type="text_delta",
                     text=content_delta
-                )
+                ))
 
             # Handle tool_calls from additional_kwargs (already extracted above)
             tool_calls_delta = additional_kwargs.get("tool_calls")
@@ -245,7 +252,7 @@ async def anthropic_stream_generator(
             if tool_calls_delta:
                 # Close text block if it was started and has content
                 if text_block_started and text_block_has_content:
-                    yield generate_content_block_stop(block_index)
+                    yield _track(generate_content_block_stop(block_index))
                     block_index += 1
                     text_block_started = False
                     text_block_has_content = False
@@ -283,7 +290,7 @@ async def anthropic_stream_generator(
                         if anthropic_id.startswith("call_"):
                             anthropic_id = "toolu_" + anthropic_id[5:]
 
-                        yield generate_content_block_start(
+                        yield _track(generate_content_block_start(
                             index=state["block_index"],
                             content_block={
                                 "type": "tool_use",
@@ -291,30 +298,30 @@ async def anthropic_stream_generator(
                                 "name": state["name"],
                                 "input": {}
                             }
-                        )
+                        ))
                         state["started"] = True
 
                     # Stream argument fragments as input_json_delta
                     if tc_arguments and state["started"]:
                         state["arguments_buffer"] += tc_arguments
-                        yield generate_content_block_delta(
+                        yield _track(generate_content_block_delta(
                             index=state["block_index"],
                             delta_type="input_json_delta",
                             partial_json=tc_arguments
-                        )
+                        ))
 
                 # Set stop_reason to tool_use if we have tool calls
                 stop_reason = "tool_use"
 
         # Close text block if it was started but not closed
         if text_block_started:
-            yield generate_content_block_stop(block_index)
+            yield _track(generate_content_block_stop(block_index))
             block_index += 1
 
         # Close all tool blocks
         for tc_index, state in sorted(tool_states.items()):
             if state["started"]:
-                yield generate_content_block_stop(state["block_index"])
+                yield _track(generate_content_block_stop(state["block_index"]))
 
         # Send message_delta with usage
         # Note: Accurate token counting requires backend support
@@ -324,10 +331,15 @@ async def anthropic_stream_generator(
                 len(s["arguments_buffer"]) for s in tool_states.values()
             ) // 4  # Rough estimate
         )
-        yield generate_message_delta(stop_reason, usage)
+        yield _track(generate_message_delta(stop_reason, usage))
 
         # Send message_stop
-        yield generate_message_stop()
+        yield _track(generate_message_stop())
+
+        logger.info(
+            f"[ANTHROPIC RESPONSE] Completed streaming message_id={message_id}, "
+            f"response_size={total_response_size}"
+        )
 
     except Exception as e:
         logger.exception("Error in anthropic_stream_generator")
@@ -381,12 +393,14 @@ async def create_message(
         )
 
     # Log request
+    request_size = len(json.dumps(request.model_dump(mode='json'), ensure_ascii=False))
     logger.info(
         f"[ANTHROPIC REQUEST] model={request.model}, "
         f"max_tokens={request.max_tokens}, "
         f"stream={request.stream}, "
         f"messages={len(request.messages)}, "
-        f"tools={len(request.tools) if request.tools else 0}"
+        f"tools={len(request.tools) if request.tools else 0}, "
+        f"request_size={request_size}"
     )
 
     # Convert to LangChain format
@@ -433,10 +447,12 @@ async def create_message(
             )
             anthropic_resp.id = message_id
 
+            response_size = len(json.dumps(anthropic_resp.model_dump(mode='json'), ensure_ascii=False))
             logger.info(
                 f"[ANTHROPIC RESPONSE] message_id={message_id}, "
                 f"stop_reason={anthropic_resp.stop_reason}, "
-                f"content_blocks={len(anthropic_resp.content)}"
+                f"content_blocks={len(anthropic_resp.content)}, "
+                f"response_size={response_size}"
             )
 
             return anthropic_resp

@@ -168,6 +168,15 @@ async def response_stream_generator(
             f"max_tokens={max_tokens}"
         )
 
+        # Track total response size
+        total_response_size = 0
+
+        def _emit(event):
+            nonlocal total_response_size
+            data = format_stream_event(event)
+            total_response_size += len(data)
+            return data
+
         # Send response.created event
         sequence_number = 0  # Global sequence counter for events
         sequence_number += 1
@@ -177,7 +186,7 @@ async def response_stream_generator(
             previous_response_id=previous_response_id,
             sequence_number=sequence_number
         )
-        yield format_stream_event(created_event)
+        yield _emit(created_event)
 
         # Track output state
         output_items = []
@@ -204,7 +213,7 @@ async def response_stream_generator(
             item_id=message_item_id,
             sequence_number=sequence_number
         )
-        yield format_stream_event(added_event)
+        yield _emit(added_event)
 
         # Stream content
         async for chunk in chat_model.astream(lc_messages, max_tokens=max_tokens, tools=tools):
@@ -231,7 +240,7 @@ async def response_stream_generator(
                     item_id=message_item_id,
                     sequence_number=sequence_number
                 )
-                yield format_stream_event(delta_event)
+                yield _emit(delta_event)
 
             # Handle tool calls
             if tool_calls_delta:
@@ -255,7 +264,7 @@ async def response_stream_generator(
                         item=output_items[0],
                         sequence_number=sequence_number
                     )
-                    yield format_stream_event(done_event)
+                    yield _emit(done_event)
 
                 for tc in tool_calls_delta:
                     tc_index = tc.get("index", 0)
@@ -296,7 +305,7 @@ async def response_stream_generator(
                             item_id=fc_item_id,
                             sequence_number=sequence_number
                         )
-                        yield format_stream_event(added_event)
+                        yield _emit(added_event)
 
                     state = tool_states[tc_index]
 
@@ -317,7 +326,7 @@ async def response_stream_generator(
                             item_id=state["item_id"],
                             sequence_number=sequence_number
                         )
-                        yield format_stream_event(delta_event)
+                        yield _emit(delta_event)
 
         # Finalize output items
 
@@ -336,7 +345,7 @@ async def response_stream_generator(
             item=output_items[0],
             sequence_number=sequence_number
         )
-        yield format_stream_event(done_event)
+        yield _emit(done_event)
 
         # Finalize all tool call items
         for tc_index, state in sorted(tool_states.items()):
@@ -349,7 +358,7 @@ async def response_stream_generator(
                 item=output_items[state["output_index"]],
                 sequence_number=sequence_number
             )
-            yield format_stream_event(done_event)
+            yield _emit(done_event)
 
         # Calculate usage (rough estimate)
         input_tokens = sum(len(str(m.content).split()) for m in lc_messages) // 2
@@ -382,7 +391,12 @@ async def response_stream_generator(
         # Debug: Log the final output structure
         logger.info(f"[RESPONSE API] Completed event output: {json.dumps(clean_output, ensure_ascii=False)[:1000]}")
 
-        yield format_stream_event(completed_event)
+        yield _emit(completed_event)
+
+        logger.info(
+            f"[RESPONSE API] Completed streaming response {response_id}, "
+            f"response_size={total_response_size}"
+        )
 
         # Store the response (for retrieval via GET /v1/responses/{id})
         response = Response(
@@ -420,7 +434,7 @@ async def response_stream_generator(
                 "message": str(e)
             }
         }
-        yield format_stream_event(error_event)
+        yield _emit(error_event)
 
 
 # --- API Endpoints ---
@@ -466,11 +480,14 @@ async def create_response(
     model_log = request.model
     if original_model != request.model:
         model_log = f"{request.model} (from {original_model})"
+    request_body_json = request.model_dump(mode='json')
+    request_size = len(json.dumps(request_body_json, ensure_ascii=False))
     logger.info(
         f"[RESPONSE API] model={model_log}, "
         f"stream={request.stream}, "
         f"store={request.store}, "
-        f"previous_response_id={request.previous_response_id}"
+        f"previous_response_id={request.previous_response_id}, "
+        f"request_size={request_size}"
     )
 
     # Debug: Log raw request to see original function_call format
@@ -535,9 +552,12 @@ async def create_response(
             if request.store:
                 store_response(api_response)
 
+            response_json = api_response.model_dump(mode='json')
+            response_size = len(json.dumps(response_json, ensure_ascii=False))
             logger.info(
                 f"[RESPONSE API] Completed response {response_id}, "
-                f"output_items={len(api_response.output)}"
+                f"output_items={len(api_response.output)}, "
+                f"response_size={response_size}"
             )
 
             return api_response
