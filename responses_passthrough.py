@@ -160,7 +160,7 @@ async def passthrough_stream_generator(
     request_body: Dict[str, Any],
     headers: Dict[str, str],
     response_id: str
-) -> AsyncIterator[str]:
+) -> AsyncIterator[bytes]:
     """
     Stream Response API events directly from the backend LLM.
 
@@ -170,7 +170,7 @@ async def passthrough_stream_generator(
         response_id: Unique response ID for logging
 
     Yields:
-        Server-Sent Events (SSE) formatted strings from the backend
+        Raw SSE bytes from the backend without line reassembly
     """
     api_url = _get_responses_api_url()
     if not api_url:
@@ -255,10 +255,10 @@ async def passthrough_stream_generator(
                         }
                     )
 
-                # Stream the response back
+                # Proxy the raw bytes so Unicode line-separator characters inside
+                # JSON payloads are not rewritten into actual newlines.
                 total_response_size = 0
-                async for line in response.aiter_lines():
-                    chunk = f"{line}\n"
+                async for chunk in response.aiter_bytes():
                     total_response_size += len(chunk)
                     yield chunk
 

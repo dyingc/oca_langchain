@@ -12,6 +12,47 @@ class ConnectionMode(Enum):
     DIRECT = "direct"
     PROXY = "proxy"
 
+
+async def _aiter_crlf_lines(response: httpx.Response) -> AsyncIterator[str]:
+    """
+    Iterate response text lines using only CR/LF byte delimiters.
+
+    httpx.Response.aiter_lines() uses str.splitlines(), which also treats
+    Unicode separators such as U+2028/U+2029 as line breaks. Those characters
+    can legally appear inside JSON strings in SSE data payloads and must not
+    be rewritten into actual newlines.
+    """
+    buffer = b""
+
+    async for chunk in response.aiter_bytes():
+        if not chunk:
+            continue
+        buffer += chunk
+
+        while True:
+            lf_idx = buffer.find(b"\n")
+            cr_idx = buffer.find(b"\r")
+            indices = [idx for idx in (lf_idx, cr_idx) if idx != -1]
+            if not indices:
+                break
+
+            split_idx = min(indices)
+            if buffer[split_idx : split_idx + 1] == b"\r" and split_idx == len(buffer) - 1:
+                break
+
+            yield buffer[:split_idx].decode("utf-8", errors="replace")
+
+            if buffer[split_idx : split_idx + 2] == b"\r\n":
+                buffer = buffer[split_idx + 2 :]
+            else:
+                buffer = buffer[split_idx + 1 :]
+
+    if buffer.endswith(b"\r"):
+        buffer = buffer[:-1]
+
+    if buffer:
+        yield buffer.decode("utf-8", errors="replace")
+
 class OCAOauth2TokenManager:
     """
     Manage OAuth2 tokens, including automatic refresh and persistence.
@@ -321,7 +362,7 @@ class OCAOauth2TokenManager:
                             pass
                     if self._debug:
                         print(f"Async streaming connection to {url} with mode {primary_mode.value} succeeded.")
-                    async for line in response.aiter_lines():
+                    async for line in _aiter_crlf_lines(response):
                         yield line
             return
         except httpx.RequestError as e:
@@ -362,7 +403,7 @@ class OCAOauth2TokenManager:
                                 pass
                         if self._debug:
                             print(f"Async streaming retry with {secondary_mode.value} mode succeeded.")
-                        async for line in response.aiter_lines():
+                        async for line in _aiter_crlf_lines(response):
                             yield line
                 return
             except httpx.RequestError as e2:
