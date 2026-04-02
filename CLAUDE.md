@@ -55,9 +55,8 @@ pytest tests/
 # Run a single test file
 pytest tests/test_responses_api.py
 
-# Run tests in root (older standalone scripts)
-python test_message_validation.py
-python test_unified_validation.py
+# Run E2E tests (requires running API server)
+pytest tests/test_e2e_api_validation.py -m e2e
 ```
 
 ## 核心架构
