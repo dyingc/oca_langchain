@@ -27,14 +27,30 @@ def _is_loopback_hostname(hostname: Optional[str]) -> bool:
         return False
 
 
+def _has_loopback_proxy(proxies: Any) -> bool:
+    if not isinstance(proxies, dict):
+        return False
+    for proxy_url in proxies.values():
+        if not proxy_url:
+            continue
+        if _is_loopback_hostname(urlparse(str(proxy_url)).hostname):
+            return True
+    return False
+
+
 def _should_suppress_insecure_request_warning(url: str, verify: Any) -> bool:
     if verify is not False:
         return False
-    return _is_loopback_hostname(urlparse(url).hostname)
+    if _is_loopback_hostname(urlparse(url).hostname):
+        return True
+    return False
 
 
 def _request_with_warning_control(method: str, url: str, verify: Any, **kwargs: Any) -> requests.Response:
-    if _should_suppress_insecure_request_warning(url, verify):
+    if verify is False and (
+        _should_suppress_insecure_request_warning(url, verify)
+        or _has_loopback_proxy(kwargs.get("proxies"))
+    ):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", InsecureRequestWarning)
             return requests.request(method, url, verify=verify, **kwargs)
