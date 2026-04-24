@@ -1,16 +1,44 @@
 import os
+import ipaddress
 import requests
 import httpx
+import warnings
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, AsyncIterator, Callable
 from urllib.parse import urlparse
 from enum import Enum
+from urllib3.exceptions import InsecureRequestWarning
 
 from dotenv import load_dotenv, get_key, set_key
 
 class ConnectionMode(Enum):
     DIRECT = "direct"
     PROXY = "proxy"
+
+
+def _is_loopback_hostname(hostname: Optional[str]) -> bool:
+    if not hostname:
+        return False
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _should_suppress_insecure_request_warning(url: str, verify: Any) -> bool:
+    if verify is not False:
+        return False
+    return _is_loopback_hostname(urlparse(url).hostname)
+
+
+def _request_with_warning_control(method: str, url: str, verify: Any, **kwargs: Any) -> requests.Response:
+    if _should_suppress_insecure_request_warning(url, verify):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", InsecureRequestWarning)
+            return requests.request(method, url, verify=verify, **kwargs)
+    return requests.request(method, url, verify=verify, **kwargs)
 
 
 async def _aiter_crlf_lines(response: httpx.Response) -> AsyncIterator[str]:
@@ -264,7 +292,14 @@ class OCAOauth2TokenManager:
         primary_verify = False if (force_disable or primary_mode == ConnectionMode.PROXY) else ca_bundle
 
         try:
-            response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=primary_proxies, verify=primary_verify, **kwargs)
+            response = _request_with_warning_control(
+                method,
+                url,
+                verify=primary_verify,
+                timeout=request_timeout if request_timeout is not None else self.timeout,
+                proxies=primary_proxies,
+                **kwargs,
+            )
             response.raise_for_status()
             if self._debug:
                 print(f"Successfully connected to {url} with mode {primary_mode.value}.")
@@ -289,7 +324,14 @@ class OCAOauth2TokenManager:
 
             secondary_verify = False if (force_disable or secondary_mode == ConnectionMode.PROXY) else ca_bundle
             try:
-                response = requests.request(method, url, timeout=request_timeout if request_timeout is not None else self.timeout, proxies=secondary_proxies, verify=secondary_verify, **kwargs)
+                response = _request_with_warning_control(
+                    method,
+                    url,
+                    verify=secondary_verify,
+                    timeout=request_timeout if request_timeout is not None else self.timeout,
+                    proxies=secondary_proxies,
+                    **kwargs,
+                )
                 response.raise_for_status()
                 if self._debug:
                     print(f"Retry with {secondary_mode.value} mode succeeded.")

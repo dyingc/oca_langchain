@@ -245,7 +245,11 @@ async def response_stream_generator(
             # Handle tool calls
             if tool_calls_delta:
                 # Debug: log the raw tool_calls_delta
-                logger.info(f"[DEBUG] tool_calls_delta: {json.dumps(tool_calls_delta, ensure_ascii=False)}")
+                logger.info(
+                    "[RESPONSE API DETAIL] tool_calls_delta=%s",
+                    json.dumps(tool_calls_delta, ensure_ascii=False),
+                    extra={"console": False},
+                )
 
                 # Close the message item if we're transitioning to tool calls
                 if output_items[0]["content"] or full_text_content:
@@ -389,7 +393,11 @@ async def response_stream_generator(
         )
 
         # Debug: Log the final output structure
-        logger.info(f"[RESPONSE API] Completed event output: {json.dumps(clean_output, ensure_ascii=False)[:1000]}")
+        logger.info(
+            "[RESPONSE API DETAIL] completed_output=%s",
+            json.dumps(clean_output, ensure_ascii=False)[:1000],
+            extra={"console": False},
+        )
 
         yield _emit(completed_event)
 

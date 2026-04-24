@@ -86,6 +86,23 @@ def _build_response_log_obj(content: str, tool_calls: Optional[List[dict]]) -> d
     compact["tool_calls_count"] = len(tool_calls or [])
     return compact
 
+
+def _build_response_log_summary(content: str, tool_calls: Optional[List[dict]]) -> dict:
+    return {
+        "content_chars": len(content or ""),
+        "tool_calls_count": len(tool_calls or []),
+    }
+
+
+def _log_llm_request_detail(headers: dict, payload: dict) -> None:
+    compact_payload = _compact_for_log(payload)
+    logger.info(
+        "[LLM REQUEST DETAIL] headers=%s payload=%s",
+        json.dumps(_redact_headers(headers), ensure_ascii=False),
+        json.dumps(compact_payload, ensure_ascii=False),
+        extra={"console": False},
+    )
+
 def _calculate_message_weight(msg: BaseMessage) -> int:
     """
     Calculate the weight of a message for tool call sequence validation.
@@ -531,15 +548,7 @@ class OCAChatModel(BaseChatModel):
         payload = self._build_payload(validated_messages, stream=True, **kwargs)
         # Logging request
         try:
-            compact_payload = _compact_for_log(payload)
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "[LLM REQUEST] headers=%s payload=%s",
-                    json.dumps(_redact_headers(headers), ensure_ascii=False),
-                    json.dumps(compact_payload, ensure_ascii=False),
-                )
-            else:
-                logger.info("[LLM REQUEST] %s", json.dumps(compact_payload, ensure_ascii=False))
+            _log_llm_request_detail(headers, payload)
         except Exception:
             pass
         try:
@@ -595,6 +604,10 @@ class OCAChatModel(BaseChatModel):
 
         headers = self._build_headers()
         payload = self._build_payload(validated_messages, stream=True, **kwargs)
+        try:
+            _log_llm_request_detail(headers, payload)
+        except Exception:
+            pass
         # Logging request - write to debug file
         try:
             with open("logs/debug_request.json", "w") as f:
@@ -686,18 +699,23 @@ class OCAChatModel(BaseChatModel):
                         b["function"]["arguments"] = str(b["function"]["arguments"])
                     final_tool_calls_async.append(b)
             try:
+                summary_obj = _build_response_log_summary(full_async_content, final_tool_calls_async)
+                logger.info("[LLM RESPONSE] %s", json.dumps(summary_obj, ensure_ascii=False))
+
                 log_obj = _build_response_log_obj(full_async_content, final_tool_calls_async)
-                if logger.isEnabledFor(logging.DEBUG):
-                    if response_headers:
-                        logger.debug(
-                            "[LLM RESPONSE] headers=%s body=%s",
-                            json.dumps(_compact_for_log(response_headers), ensure_ascii=False),
-                            json.dumps(log_obj, ensure_ascii=False),
-                        )
-                    else:
-                        logger.debug("[LLM RESPONSE] body=%s", json.dumps(log_obj, ensure_ascii=False))
+                if response_headers:
+                    logger.info(
+                        "[LLM RESPONSE DETAIL] headers=%s body=%s",
+                        json.dumps(_compact_for_log(response_headers), ensure_ascii=False),
+                        json.dumps(log_obj, ensure_ascii=False),
+                        extra={"console": False},
+                    )
                 else:
-                    logger.info("[LLM RESPONSE] %s", json.dumps(log_obj, ensure_ascii=False))
+                    logger.info(
+                        "[LLM RESPONSE DETAIL] body=%s",
+                        json.dumps(log_obj, ensure_ascii=False),
+                        extra={"console": False},
+                    )
             except Exception:
                 pass
         except ConnectionError as e:
@@ -763,18 +781,23 @@ class OCAChatModel(BaseChatModel):
         # Log final response
         try:
             headers_to_log = getattr(self, "_last_response_headers", None)
+            summary_obj = _build_response_log_summary(full_response_content, final_tool_calls)
+            logger.info("[LLM RESPONSE] %s", json.dumps(summary_obj, ensure_ascii=False))
+
             log_obj = _build_response_log_obj(full_response_content, final_tool_calls)
-            if logger.isEnabledFor(logging.DEBUG):
-                if headers_to_log is not None:
-                    logger.debug(
-                        "[LLM RESPONSE] headers=%s body=%s",
-                        json.dumps(_compact_for_log(headers_to_log), ensure_ascii=False),
-                        json.dumps(log_obj, ensure_ascii=False),
-                    )
-                else:
-                    logger.debug("[LLM RESPONSE] body=%s", json.dumps(log_obj, ensure_ascii=False))
+            if headers_to_log is not None:
+                logger.info(
+                    "[LLM RESPONSE DETAIL] headers=%s body=%s",
+                    json.dumps(_compact_for_log(headers_to_log), ensure_ascii=False),
+                    json.dumps(log_obj, ensure_ascii=False),
+                    extra={"console": False},
+                )
             else:
-                logger.info("[LLM RESPONSE] %s", json.dumps(log_obj, ensure_ascii=False))
+                logger.info(
+                    "[LLM RESPONSE DETAIL] body=%s",
+                    json.dumps(log_obj, ensure_ascii=False),
+                    extra={"console": False},
+                )
         except Exception:
             pass
         if final_tool_calls is not None:

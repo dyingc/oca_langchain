@@ -6,6 +6,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+class _ConsoleFilter(logging.Filter):
+    """Hide file-only verbose records from the console handler."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.ERROR:
+            return True
+        return getattr(record, "console", True)
+
+
 def _ensure_parent_dir(path: str) -> None:
     directory = os.path.dirname(os.path.abspath(path))
     if directory and not os.path.exists(directory):
@@ -26,9 +35,9 @@ def get_logger(name: str) -> logging.Logger:
     # Force reload config to ensure we get the latest env vars
     log_file = os.getenv("LOG_FILE_PATH", "oca_llm.log")
 
-    # If handlers exist, check if they are configured correctly (e.g. file path matches)
-    # For simplicity in this debug phase, we'll clear existing handlers to force reconfiguration
     if logger.handlers:
+        for handler in logger.handlers:
+            handler.close()
         logger.handlers.clear()
 
     print(f"Configuring logger '{name}' writing to '{log_file}'")
@@ -59,6 +68,7 @@ def get_logger(name: str) -> logging.Logger:
         sh = logging.StreamHandler()
         sh.setFormatter(fmt)
         sh.setLevel(logging.DEBUG)
+        sh.addFilter(_ConsoleFilter())
         logger.addHandler(sh)
 
     return logger
