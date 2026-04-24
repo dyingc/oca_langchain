@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 import httpx
 
 from core.logger import get_logger
-from core.oauth2_token_manager import OCAOauth2TokenManager
+from core.oauth2_token_manager import OCAOauth2TokenManager, _request_with_warning_control
 from runtime_env import _get_runtime_env_value
 from model_resolver import resolve_model_for_endpoint
 
@@ -336,14 +336,14 @@ async def passthrough_non_streaming(
     verify = False if (disable_ssl or proxies) else (ca_bundle or True)
 
     try:
-        response = requests.request(
+        response = _request_with_warning_control(
             "POST",
             api_url,
+            verify=verify,
             data=json.dumps(request_body),
             headers=forward_headers,
             timeout=timeout,
             proxies=proxies,
-            verify=verify,
         )
 
         if response.status_code >= 400:
