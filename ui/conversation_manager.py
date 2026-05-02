@@ -2,7 +2,7 @@ import streamlit as st
 import uuid
 import sys
 import os
-from langchain.schema import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage
 
 # Add the project root to the Python path to resolve import issues
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
