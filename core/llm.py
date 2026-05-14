@@ -16,6 +16,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 
 # --- Local Imports ---
 from .oauth2_token_manager import OCAOauth2TokenManager, ConnectionMode
+from .upstream_auth import build_upstream_headers
 import logging
 from .logger import get_logger
 
@@ -517,10 +518,7 @@ class OCAChatModel(BaseChatModel):
     def _llm_type(self) -> str: return "oca_chat_model"
 
     def _build_headers(self) -> dict:
-        return {
-            "Authorization": f"Bearer {self.token_manager.get_access_token()}",
-            "Content-Type": "application/json", "Accept": "application/json",
-        }
+        return build_upstream_headers(self.token_manager, accept="application/json")
 
     def _build_payload(self, messages: List[BaseMessage], stream: bool, **kwargs: Any) -> dict:
         payload = {

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
 from core.oauth2_token_manager import OCAOauth2TokenManager
@@ -11,6 +12,11 @@ LINE_SEPARATOR = "\u2028"
 class DummyTokenManager:
     def get_access_token(self):
         return "test-token"
+
+
+class FailingTokenManager:
+    def get_access_token(self):
+        raise RuntimeError("OAuth unavailable")
 
 
 class FakeStreamingResponse:
@@ -50,6 +56,24 @@ def make_async_client(fake_response):
             return False
 
         def stream(self, *args, **kwargs):
+            return fake_response
+
+    return FakeAsyncClient
+
+
+def make_capturing_async_client(fake_response, captured):
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            captured["headers"] = kwargs.get("headers", {})
             return fake_response
 
     return FakeAsyncClient
@@ -97,6 +121,101 @@ def test_passthrough_stream_generator_preserves_raw_sse_bytes(monkeypatch):
     )
 
     assert streamed == raw_stream
+
+
+def test_passthrough_stream_generator_prefers_upstream_api_key(monkeypatch, tmp_path):
+    raw_text = 'data: {"type":"response.completed"}\n\n'
+    fake_response = FakeStreamingResponse([raw_text.encode("utf-8")])
+    captured = {}
+
+    env_file = tmp_path / ".env"
+    env_file.write_text('LLM_API_KEY="upstream-api-key"\n', encoding="utf-8")
+    monkeypatch.setattr("runtime_env._ENV_PATH", str(env_file))
+    monkeypatch.setattr("responses_passthrough._get_responses_api_url", lambda: "https://example.test/responses")
+    monkeypatch.setattr("responses_passthrough._get_token_manager", lambda: DummyTokenManager())
+    monkeypatch.setattr("responses_passthrough._get_proxies_for_httpx", lambda: None)
+    monkeypatch.setattr(
+        "responses_passthrough.httpx.AsyncClient",
+        make_capturing_async_client(fake_response, captured),
+    )
+
+    asyncio.run(
+        collect_bytes(
+            passthrough_stream_generator(
+                request_body={"model": "oca/test", "stream": True},
+                headers={},
+                response_id="resp_test",
+            )
+        )
+    )
+
+    assert captured["headers"]["Authorization"] == "Bearer upstream-api-key"
+
+
+def test_passthrough_stream_generator_prefers_oauth_before_codex_auth(monkeypatch, tmp_path):
+    raw_text = 'data: {"type":"response.completed"}\n\n'
+    fake_response = FakeStreamingResponse([raw_text.encode("utf-8")])
+    captured = {}
+
+    env_file = tmp_path / ".env"
+    env_file.write_text('LLM_API_KEY=""\n', encoding="utf-8")
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(json.dumps({"OPENAI_API_KEY": "codex-api-key"}), encoding="utf-8")
+
+    monkeypatch.setattr("runtime_env._ENV_PATH", str(env_file))
+    monkeypatch.setenv("CODEX_AUTH_JSON", str(auth_file))
+    monkeypatch.setattr("responses_passthrough._get_responses_api_url", lambda: "https://example.test/responses")
+    monkeypatch.setattr("responses_passthrough._get_token_manager", lambda: DummyTokenManager())
+    monkeypatch.setattr("responses_passthrough._get_proxies_for_httpx", lambda: None)
+    monkeypatch.setattr(
+        "responses_passthrough.httpx.AsyncClient",
+        make_capturing_async_client(fake_response, captured),
+    )
+
+    asyncio.run(
+        collect_bytes(
+            passthrough_stream_generator(
+                request_body={"model": "oca/test", "stream": True},
+                headers={},
+                response_id="resp_test",
+            )
+        )
+    )
+
+    assert captured["headers"]["Authorization"] == "Bearer test-token"
+
+
+def test_passthrough_stream_generator_falls_back_to_codex_auth(monkeypatch, tmp_path):
+    raw_text = 'data: {"type":"response.completed"}\n\n'
+    fake_response = FakeStreamingResponse([raw_text.encode("utf-8")])
+    captured = {}
+
+    env_file = tmp_path / ".env"
+    env_file.write_text('LLM_API_KEY=""\n', encoding="utf-8")
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(json.dumps({"OPENAI_API_KEY": "codex-api-key"}), encoding="utf-8")
+
+    monkeypatch.setattr("runtime_env._ENV_PATH", str(env_file))
+    monkeypatch.setenv("CODEX_AUTH_JSON", str(auth_file))
+    monkeypatch.setattr("responses_passthrough._get_responses_api_url", lambda: "https://example.test/responses")
+    monkeypatch.setattr("responses_passthrough._get_token_manager", lambda: FailingTokenManager())
+    monkeypatch.setattr("responses_passthrough._get_proxies_for_httpx", lambda: None)
+    monkeypatch.setattr(
+        "responses_passthrough.httpx.AsyncClient",
+        make_capturing_async_client(fake_response, captured),
+    )
+
+    asyncio.run(
+        collect_bytes(
+            passthrough_stream_generator(
+                request_body={"model": "oca/test", "stream": True},
+                headers={},
+                response_id="resp_test",
+            )
+        )
+    )
+
+    assert captured["headers"]["Authorization"] == "Bearer codex-api-key"
 
 
 def test_async_stream_request_preserves_unicode_separator_inside_json(monkeypatch, tmp_path):

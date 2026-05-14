@@ -16,6 +16,7 @@ import httpx
 
 from core.logger import get_logger
 from core.oauth2_token_manager import OCAOauth2TokenManager, _request_with_warning_control
+from core.upstream_auth import build_upstream_headers
 from runtime_env import _get_runtime_env_value
 from model_resolver import resolve_model_for_endpoint
 
@@ -182,13 +183,10 @@ async def passthrough_stream_generator(
     tm = _get_token_manager()
     proxy_url = _get_proxies_for_httpx()
 
-    # Prepare headers - use the access token from token manager
-    access_token = tm.get_access_token()
-    forward_headers = {
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream" if request_body.get("stream") else "application/json",
-        "Authorization": f"Bearer {access_token}",
-    }
+    forward_headers = build_upstream_headers(
+        tm,
+        accept="text/event-stream" if request_body.get("stream") else "application/json",
+    )
 
     timeout = float(_get_runtime_env_value("LLM_REQUEST_TIMEOUT", "180"))
     ca_bundle = _get_runtime_env_value("SSL_CERT_FILE", "") or _get_runtime_env_value("REQUESTS_CA_BUNDLE", "")
@@ -308,13 +306,7 @@ async def passthrough_non_streaming(
 
     tm = _get_token_manager()
 
-    # Prepare headers - use the access token from token manager
-    access_token = tm.get_access_token()
-    forward_headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": f"Bearer {access_token}",
-    }
+    forward_headers = build_upstream_headers(tm, accept="application/json")
 
     timeout = float(_get_runtime_env_value("LLM_REQUEST_TIMEOUT", "180"))
     ca_bundle = _get_runtime_env_value("SSL_CERT_FILE", "") or _get_runtime_env_value("REQUESTS_CA_BUNDLE", "")

@@ -106,6 +106,7 @@ OAUTH_REFRESH_TOKEN="your_initial_refresh_token"
 
 # --- LLM API Configuration ---
 LLM_API_URL="https://your-llm-api-endpoint/v1/chat/completions"
+LLM_API_KEY=""
 LLM_MODEL_NAME="your-model-name"
 LLM_MODELS_API_URL=""
 LLM_SYSTEM_PROMPT="You are a helpful assistant."
@@ -134,6 +135,10 @@ LOG_FILE_PATH="logs/llm_api.log"
 OAUTH_ACCESS_TOKEN=
 OAUTH_ACCESS_TOKEN_EXPIRES_AT=
 ```
+
+`LLM_API_KEY` is optional. When set, upstream chat/responses inference uses it
+instead of OAuth access tokens; when empty, the service uses OAuth first and
+only falls back to Codex's `~/.codex/auth.json` if OAuth is unavailable.
 
 ### Proxy configuration and runtime debug
 
